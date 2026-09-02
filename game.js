@@ -246,6 +246,8 @@ class Aircraft {
     const worldOrientation = Cesium.Transforms.headingPitchRollQuaternion(
       position,
       hpr,
+      Cesium.Ellipsoid.WGS84,
+      undefined,
       new Cesium.Quaternion()
     );
 
