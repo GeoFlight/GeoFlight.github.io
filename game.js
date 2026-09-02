@@ -470,8 +470,8 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 42; // meters behind the aircraft
-    this.aboveDistance = 28;  // meters above the aircraft
+    this.behindDistance = 48; // meters behind the aircraft
+    this.aboveDistance = 65;  // meters above the aircraft (raised for a fuller view of the plane)
     this.previousPosition = null;
     this.travelDirection = null; // world-space unit vector, last known direction of travel
   }
@@ -510,7 +510,7 @@ class ChaseCamera {
 
     const lookTarget = Cesium.Cartesian3.add(
       position,
-      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 25, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 12, new Cesium.Cartesian3()),
       new Cesium.Cartesian3()
     );
     const direction = Cesium.Cartesian3.subtract(lookTarget, cameraPosition, new Cesium.Cartesian3());
