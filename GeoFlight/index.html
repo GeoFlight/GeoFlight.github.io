@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PolyFlight — 1:1 Earth Flight Simulator</title>
+
+<link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Widgets/widgets.css" />
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.121/Build/Cesium/Cesium.js"></script>
+
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Cesium globe fills the whole viewport -->
+  <div id="cesiumContainer"></div>
+
+  <!-- ===================== START SCREEN ===================== -->
+  <div id="startScreen">
+    <header class="topbar">
+      <span class="wordmark">POLYFLIGHT</span>
+      <span class="build-tag">ALPHA</span>
+    </header>
+
+    <div class="start-panel">
+      <h1 class="headline">CHOOSE YOUR<br />SPAWN POINT</h1>
+      <p class="subtitle">1:1 EARTH · FLIGHT SIMULATOR</p>
+      <p class="description">
+        Explore the globe, then click a location. Your aircraft will take off from that point.
+      </p>
+
+      <div id="selectionBox" class="selection-box selection-box--empty">
+        <span class="selection-label">SELECTED LOCATION</span>
+        <span id="selectionCoords" class="selection-coords">No location selected</span>
+      </div>
+
+      <button id="startFlightBtn" class="start-button" disabled>START FLIGHT</button>
+
+      <div class="hint-row">
+        <div class="hint"><span class="hint-key">Click</span><span class="hint-label">Select</span></div>
+        <div class="hint"><span class="hint-key">Drag</span><span class="hint-label">Rotate</span></div>
+        <div class="hint"><span class="hint-key">Wheel</span><span class="hint-label">Zoom</span></div>
+      </div>
+    </div>
+
+    <button id="creditsToggle" class="credits-toggle" type="button">Credits</button>
+    <div id="creditsPanel" class="credits-panel hidden">
+      <p><strong>Jet by jeremy</strong> [CC-BY] via Poly Pizza</p>
+      <p><a href="https://poly.pizza/m/6fyLMORhgGK" target="_blank" rel="noopener">poly.pizza/m/6fyLMORhgGK</a></p>
+      <p><a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC-BY 3.0 License</a></p>
+    </div>
+  </div>
+
+  <!-- ===================== FLIGHT HUD ===================== -->
+  <div id="flightHud" class="hidden">
+    <div class="hud-title">POLYFLIGHT</div>
+    <div class="hud-row"><span class="hud-key">ALT</span><span id="hudAlt" class="hud-val">0 m</span></div>
+    <div class="hud-row"><span class="hud-key">SPEED</span><span id="hudSpeed" class="hud-val">0 m/s</span></div>
+    <div class="hud-row"><span class="hud-key">LAT</span><span id="hudLat" class="hud-val">0.0000°</span></div>
+    <div class="hud-row"><span class="hud-key">LON</span><span id="hudLon" class="hud-val">0.0000°</span></div>
+    <div class="hud-controls-hint">R · Reset to spawn</div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
