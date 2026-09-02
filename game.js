@@ -36,7 +36,7 @@
 // Cesium ion's "Allowed URLs" to the PolyFlight GitHub Pages origin.
 // Replace with your own token before deploying.
 const CESIUM_ION_TOKEN =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImdvY1FFZ1NtTlh4Tl9UMWYiLCJqdGkiOiJjNWIyNzAzZS1iY2IyLTRkZGEtYWQ2YS0yZDM1NWNmMDZmNjAiLCJpZCI6NDc3NDU1LCJzdWIiOiJwb2x5ZmxpZ2h0IiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6InBvbHlmbGlnaHQgd2ViIiwiaWF0IjoxNzg4Mzc1MjM2fQ.FzjDI1azzKo5YOWUExdGaOX0khV-nxQ1TO1L07oD8r0";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImQwUWE3N25zcFFJeXZMX1EiLCJqdGkiOiJjNWIyNzAzZS1iY2IyLTRkZGEtYWQ2YS0yZDM1NWNmMDZmNjAiLCJpZCI6NDc3NDU1LCJzdWIiOiJwb2x5ZmxpZ2h0IiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6InBvbHlmbGlnaHQgd2ViIiwiaWF0IjoxNzg4MjI2NDQ2fQ.yFZj7BssVTN4CszgX_IOlTHHC2khVIOeR3fehPed8vE";
 
 const AIRCRAFT_MODEL_URL = "assets/planes/jet.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
