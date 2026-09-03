@@ -331,6 +331,13 @@ class FlightController {
     s.rollRate = Cesium.Math.clamp(s.rollRate, -this.maxRollRate, this.maxRollRate);
     s.pitch += s.pitchRate * dt;
     s.roll += s.rollRate * dt;
+    // Keyboard banking is momentary: once A/D is released, quickly return
+    // the visual model to level flight instead of leaving it side-on.
+    if (rollInput === 0) {
+      const levelBlend = 1 - Math.exp(-5.5 * dt);
+      s.roll += (0 - s.roll) * levelBlend;
+      s.rollRate *= 1 - levelBlend;
+    }
     if (Math.abs(s.pitch) >= this.maxPitch) s.pitchRate = 0;
     if (Math.abs(s.roll) >= this.maxBank) s.rollRate = 0;
     s.pitch = Cesium.Math.clamp(s.pitch, -this.maxPitch, this.maxPitch);
