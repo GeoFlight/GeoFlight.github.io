@@ -42,7 +42,7 @@ const AIRCRAFT_MODEL_URL = "assets/planes/jet.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
 // The source model is authored in meters. Keeping it close to 1:1 avoids the
 // aircraft reading like a giant object next to the terrain and globe.
-const AIRCRAFT_MODEL_SCALE = 1.0;
+const AIRCRAFT_MODEL_SCALE = 0.55;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
@@ -73,6 +73,12 @@ class CesiumWorld {
     this.viewer.scene.globe.enableLighting = true;
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.viewer.scene.skyAtmosphere.show = true;
+    // Favor steady gameplay frame rates over rendering more physical pixels
+    // than the display needs. Terrain tiles can also remain a little coarser
+    // while flying quickly, which reduces GPU and network pressure.
+    this.viewer.resolutionScale = 1.0;
+    this.viewer.scene.globe.maximumScreenSpaceError = 3.5;
+    this.viewer.scene.fog.enabled = true;
 
     // Start-screen framing: full Earth from space.
     this.viewer.camera.flyTo({
@@ -274,14 +280,14 @@ class FlightController {
     // light stability bring the aircraft back toward trimmed, level flight.
     // This avoids instant attitude snaps while remaining controllable.
     this.maxPitch = Cesium.Math.toRadians(22);
-    this.maxBank = Cesium.Math.toRadians(45);
+    this.maxBank = Cesium.Math.toRadians(42);
     this.maxPitchRate = Cesium.Math.toRadians(36);
-    this.maxRollRate = Cesium.Math.toRadians(64);
+    this.maxRollRate = Cesium.Math.toRadians(72);
     this.pitchAcceleration = Cesium.Math.toRadians(140);
-    this.rollAcceleration = Cesium.Math.toRadians(250);
+    this.rollAcceleration = Cesium.Math.toRadians(280);
     this.angularDamping = 4.2;
     this.levelingStrength = 2.4;
-    this.bankTurnStrength = 14.7; // responsive ~1.5 g assisted jet turns
+    this.bankTurnStrength = 13.2; // tighter, fighter-style coordinated turns
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 3430;       // approximately Mach 10 at sea level
     this.throttleRate = 0.12;
@@ -340,7 +346,7 @@ class FlightController {
     // Keyboard banking is momentary: once A/D is released, quickly return
     // the visual model to level flight instead of leaving it side-on.
     if (rollInput === 0) {
-      const levelBlend = 1 - Math.exp(-5.5 * dt);
+      const levelBlend = 1 - Math.exp(-7.5 * dt);
       s.roll += (0 - s.roll) * levelBlend;
       s.rollRate *= 1 - levelBlend;
     }
@@ -450,15 +456,13 @@ class ChaseCamera {
     this.world = world;
     this.behindDistance = 72; // meters behind the aircraft
     this.aboveDistance = 42;  // meters above it: a clearer elevated chase view
-    this.previousPosition = null;
-    this.travelDirection = null; // world-space unit vector, last known direction of travel
+    this.travelDirection = null; // world-space unit vector aligned with flight heading
     // A wider lens gives context for the full-scale globe and prevents the
     // aircraft from filling the frame during low passes.
     this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(82);
   }
 
   reset() {
-    this.previousPosition = null;
     this.travelDirection = null;
   }
 
@@ -470,33 +474,16 @@ class ChaseCamera {
     const ellipsoid = this.world.viewer.scene.globe.ellipsoid;
     const up = ellipsoid.geodeticSurfaceNormal(position, new Cesium.Cartesian3());
 
-    if (this.previousPosition) {
-      const delta = Cesium.Cartesian3.subtract(position, this.previousPosition, new Cesium.Cartesian3());
-      // Follow horizontal travel only. Including climb/descent in this vector
-      // swings the camera below or above the jet when W/S is pressed.
-      const verticalComponent = Cesium.Cartesian3.multiplyByScalar(
-        up,
-        Cesium.Cartesian3.dot(delta, up),
-        new Cesium.Cartesian3()
-      );
-      const horizontalDelta = Cesium.Cartesian3.subtract(delta, verticalComponent, new Cesium.Cartesian3());
-      if (Cesium.Cartesian3.magnitude(horizontalDelta) > 0.01) {
-        this.travelDirection = Cesium.Cartesian3.normalize(horizontalDelta, new Cesium.Cartesian3());
-      }
-    }
-    this.previousPosition = Cesium.Cartesian3.clone(position);
-
-    if (!this.travelDirection) {
-      // No motion yet to derive a direction from. Use Cesium's local ENU
-      // frame, which also provides a valid basis at the poles.
-      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position);
-      this.travelDirection = Cesium.Matrix4.multiplyByPointAsVector(
-        enu,
-        new Cesium.Cartesian3(Math.sin(state.heading), Math.cos(state.heading), 0),
-        new Cesium.Cartesian3()
-      );
-      Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
-    }
+    // Use the same heading that drives the flight physics. Deriving camera
+    // direction from one frame's movement can flip during terrain contact,
+    // reset, or a steep climb and causes the intermittent side-on view.
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+    this.travelDirection = Cesium.Matrix4.multiplyByPointAsVector(
+      enu,
+      new Cesium.Cartesian3(Math.sin(state.heading), Math.cos(state.heading), 0),
+      this.travelDirection ?? new Cesium.Cartesian3()
+    );
+    Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
 
     const behindOffset = Cesium.Cartesian3.multiplyByScalar(
       this.travelDirection, -this.behindDistance, new Cesium.Cartesian3()
