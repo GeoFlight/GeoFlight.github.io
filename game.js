@@ -45,9 +45,8 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
-// The model uses glTF axes (+Z forward, +Y up); the Cesium aircraft frame is
-// +X forward, +Z up. This makes W/S pitch the nose and A/D bank the wings.
-const AIRCRAFT_MODEL_AXIS_CORRECTION = new Cesium.Quaternion(0.5, 0.5, 0.5, 0.5);
+// This asset needs a fixed yaw correction to sit upright in Cesium.
+const AIRCRAFT_MODEL_HEADING_CORRECTION_DEG = 270;
 
 // ---------------------------------------------------------------------------
 // CesiumWorld — the globe itself
@@ -214,7 +213,13 @@ class PlayerState {
 class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
-    this.modelCorrection = Cesium.Quaternion.clone(AIRCRAFT_MODEL_AXIS_CORRECTION);
+    this.modelCorrection = Cesium.Quaternion.fromHeadingPitchRoll(
+      new Cesium.HeadingPitchRoll(
+        Cesium.Math.toRadians(AIRCRAFT_MODEL_HEADING_CORRECTION_DEG),
+        0,
+        0
+      )
+    );
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -231,11 +236,14 @@ class Aircraft {
   /** Push a PlayerState onto the Cesium entity for this frame. */
   render(state) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
-    // Use Cesium's native HPR axes: heading = yaw, pitch = nose up/down,
-    // roll = rotation around the aircraft's forward axis. The previous
-    // implementation applied roll around UNIT_Z, the vertical axis, which
-    // made pitch/roll interact incorrectly and could put the model on its side.
-    const hpr = new Cesium.HeadingPitchRoll(state.heading, state.pitch, state.roll);
+    // The imported mesh has its pitch and roll axes interchanged relative to
+    // Cesium's entity frame. Remap the *visual* attitude while leaving the
+    // physics state untouched: W/S pitch the nose and A/D bank the wings.
+    const hpr = new Cesium.HeadingPitchRoll(
+      state.heading,
+      -state.roll,
+      -state.pitch
+    );
     const worldOrientation = Cesium.Transforms.headingPitchRollQuaternion(
       position,
       hpr,
