@@ -276,20 +276,16 @@ class FlightController {
     // after the player returns to the tab.
     window.addEventListener("blur", () => this.keys.clear());
 
-    // Keyboard flight model: inputs apply rotational force, then damping and
-    // light stability bring the aircraft back toward trimmed, level flight.
-    // This avoids instant attitude snaps while remaining controllable.
-    this.maxPitch = Cesium.Math.toRadians(22);
-    this.maxBank = Cesium.Math.toRadians(42);
-    this.maxPitchRate = Cesium.Math.toRadians(36);
-    this.maxRollRate = Cesium.Math.toRadians(72);
-    this.pitchAcceleration = Cesium.Math.toRadians(140);
-    this.rollAcceleration = Cesium.Math.toRadians(280);
-    this.barrelRollAcceleration = Cesium.Math.toRadians(1100);
-    this.maxBarrelRollRate = Cesium.Math.toRadians(240);
+    // Keyboard flight model: controls apply rotational force and the aircraft
+    // retains its chosen pitch/bank when released, like a trimmed fighter.
+    this.maxPitchRate = Cesium.Math.toRadians(120);
+    this.maxRollRate = Cesium.Math.toRadians(240);
+    this.pitchAcceleration = Cesium.Math.toRadians(460);
+    this.rollAcceleration = Cesium.Math.toRadians(900);
     this.angularDamping = 4.2;
-    this.levelingStrength = 2.4;
-    this.bankTurnStrength = 13.2; // tighter, fighter-style coordinated turns
+    this.turnBankLimit = Cesium.Math.toRadians(82);
+    this.bankTurnStrength = 9.81;
+    this.maxTurnRate = Cesium.Math.toRadians(26);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 3430;       // approximately Mach 10 at sea level
     this.throttleRate = 0.12;
@@ -333,58 +329,43 @@ class FlightController {
     if (k.has("KeyA") || k.has("ArrowLeft") || k.has("KeyJ")) rollInput -= 1;
     if (k.has("KeyD") || k.has("ArrowRight") || k.has("KeyL")) rollInput += 1;
 
-    // Z/X are dedicated aerobatic aileron-roll controls. Keeping them apart
-    // from A/D preserves precise, banked turns for ordinary flying.
-    let barrelInput = 0;
-    if (k.has("KeyZ")) barrelInput -= 1;
-    if (k.has("KeyX")) barrelInput += 1;
+    const braking = k.has("ControlLeft") || k.has("ControlRight") ||
+      k.has("ArrowDown") || k.has("KeyK");
 
     // Integrate angular velocity instead of snapping directly to an angle.
     // The self-leveling term is deliberately weak: it feels like a stable jet,
     // not a camera that forcibly pops upright when a key is released.
-    s.pitchRate += (pitchInput * this.pitchAcceleration - s.pitch * this.levelingStrength) * dt;
-    s.rollRate += (rollInput * this.rollAcceleration - s.roll * this.levelingStrength) * dt;
-    if (barrelInput !== 0) {
-      s.rollRate += barrelInput * this.barrelRollAcceleration * dt;
-      // A barrel roll carries a little positive pitch, giving it a shallow
-      // spiral rather than a purely flat, arcade-style spin.
-      s.pitchRate += Cesium.Math.toRadians(26) * dt;
-    }
+    s.pitchRate += pitchInput * this.pitchAcceleration * dt;
+    s.rollRate += rollInput * this.rollAcceleration * dt;
     const angularDecay = Math.exp(-this.angularDamping * dt);
     s.pitchRate *= angularDecay;
     s.rollRate *= angularDecay;
     s.pitchRate = Cesium.Math.clamp(s.pitchRate, -this.maxPitchRate, this.maxPitchRate);
-    const rollRateLimit = barrelInput === 0 ? this.maxRollRate : this.maxBarrelRollRate;
-    s.rollRate = Cesium.Math.clamp(s.rollRate, -rollRateLimit, rollRateLimit);
+    s.rollRate = Cesium.Math.clamp(s.rollRate, -this.maxRollRate, this.maxRollRate);
     s.pitch += s.pitchRate * dt;
     s.roll += s.rollRate * dt;
-    // Keyboard banking is momentary: once A/D is released, quickly return
-    // the visual model to level flight instead of leaving it side-on.
-    if (rollInput === 0 && barrelInput === 0) {
-      const levelBlend = 1 - Math.exp(-7.5 * dt);
-      s.roll += (0 - s.roll) * levelBlend;
-      s.rollRate *= 1 - levelBlend;
-    }
-    if (Math.abs(s.pitch) >= this.maxPitch) s.pitchRate = 0;
-    if (barrelInput === 0 && rollInput !== 0 && Math.abs(s.roll) >= this.maxBank) {
-      s.rollRate = 0;
-    }
-    s.pitch = Cesium.Math.clamp(s.pitch, -this.maxPitch, this.maxPitch);
-    // After a barrel roll, ease back to level; do not snap an inverted model
-    // straight to the normal-turn bank limit on the first released frame.
-    s.roll = barrelInput === 0 && rollInput !== 0
-      ? Cesium.Math.clamp(s.roll, -this.maxBank, this.maxBank)
-      : Cesium.Math.negativePiToPi(s.roll);
+    // Full loops and rolls are allowed while the key is held. Wrapping keeps
+    // the state numerically stable without imposing an attitude limit.
+    s.pitch = Cesium.Math.negativePiToPi(s.pitch);
+    s.roll = Cesium.Math.negativePiToPi(s.roll);
 
     // A banked turn follows the coordinated-turn relationship:
     // turn rate = g × tan(bank) / airspeed.
     const turnBank = Cesium.Math.clamp(
       Math.asin(Math.sin(s.roll)),
-      -this.maxBank,
-      this.maxBank
+      -this.turnBankLimit,
+      this.turnBankLimit
     );
     if (Math.abs(turnBank) > Cesium.Math.toRadians(0.5)) {
-      const turnRate = (this.bankTurnStrength * Math.tan(turnBank)) / Math.max(s.speed, 5);
+      // Holding brake in the air acts as an airbrake: it sheds energy and
+      // permits a tighter transient turn, similar to a fighter's high-drag
+      // maneuver. The boost only applies while a meaningful bank exists.
+      const airbrakeTurnBoost = braking ? 1.3 : 1;
+      const turnRate = Cesium.Math.clamp(
+        (this.bankTurnStrength * Math.tan(turnBank)) / Math.max(s.speed, 5),
+        -this.maxTurnRate * airbrakeTurnBoost,
+        this.maxTurnRate * airbrakeTurnBoost
+      );
       s.heading += turnRate * dt;
     }
 
@@ -401,8 +382,6 @@ class FlightController {
     ) {
       s.throttle += this.throttleRate * dt;
     }
-    const braking = k.has("ControlLeft") || k.has("ControlRight") ||
-      k.has("ArrowDown") || k.has("KeyK");
     if (braking) s.throttle -= this.throttleRate * dt * 1.8;
     s.throttle = Cesium.Math.clamp(s.throttle, 0, 1);
     // Thrust and drag, rather than a forced target speed. Full power reaches
@@ -480,8 +459,8 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 58; // meters behind the aircraft
-    this.aboveDistance = 36;  // meters above it: a closer elevated chase view
+    this.behindDistance = 38; // meters behind the aircraft
+    this.aboveDistance = 25;  // meters above it: a close elevated chase view
     this.travelDirection = null; // world-space unit vector aligned with flight heading
     // A wider lens gives context for the full-scale globe and prevents the
     // aircraft from filling the frame during low passes.

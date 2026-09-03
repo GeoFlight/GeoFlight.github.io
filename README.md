@@ -16,14 +16,13 @@ The Cesium token in `game.js` must permit the URL where the game is hosted. Repl
 
 | Control | Action |
 | --- | --- |
-| `W` / `S` | Pitch up / down |
-| `A` / `D` or Left / Right arrows | Bank and turn left / right |
-| `Z` / `X` | Barrel roll left / right |
+| `W` / `S` | Pitch up / down; hold for a full loop |
+| `A` / `D` or Left / Right arrows | Bank and turn; hold for a full roll |
 | `Shift`, Space, Up arrow, or `I` | Increase throttle |
-| `Ctrl`, Down arrow, or `K` | Reduce throttle and brake (can stop on the ground) |
+| `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
 | `R` | Reset to the selected spawn point |
 
-The camera follows behind and slightly above the aircraft. It uses the jet's actual direction of travel, so it remains aligned as the plane banks and turns.
+The aircraft retains its pitch and bank after you release the controls. Use the opposite key to roll or pitch back to the attitude you want. The camera follows behind and slightly above the aircraft.
 
 ## Credits
 
