@@ -45,8 +45,8 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
-// This asset needs a fixed yaw correction to sit upright in Cesium.
-const AIRCRAFT_MODEL_HEADING_CORRECTION_DEG = 270;
+// Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
+// X-forward/Z-up entity frame. Do not apply another import-axis correction.
 
 // ---------------------------------------------------------------------------
 // CesiumWorld — the globe itself
@@ -213,13 +213,6 @@ class PlayerState {
 class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
-    this.modelCorrection = Cesium.Quaternion.fromHeadingPitchRoll(
-      new Cesium.HeadingPitchRoll(
-        Cesium.Math.toRadians(AIRCRAFT_MODEL_HEADING_CORRECTION_DEG),
-        0,
-        0
-      )
-    );
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -236,14 +229,9 @@ class Aircraft {
   /** Push a PlayerState onto the Cesium entity for this frame. */
   render(state) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
-    // The imported mesh has its pitch and roll axes interchanged relative to
-    // Cesium's entity frame. Remap the *visual* attitude while leaving the
-    // physics state untouched: W/S pitch the nose and A/D bank the wings.
-    const hpr = new Cesium.HeadingPitchRoll(
-      state.heading,
-      -state.roll,
-      -state.pitch
-    );
+    // Cesium has already normalized the glTF axes, so each control maps
+    // directly to its matching visual axis.
+    const hpr = new Cesium.HeadingPitchRoll(state.heading, state.pitch, state.roll);
     const worldOrientation = Cesium.Transforms.headingPitchRollQuaternion(
       position,
       hpr,
@@ -252,15 +240,8 @@ class Aircraft {
       new Cesium.Quaternion()
     );
 
-    // Apply only the model's fixed import correction after the flight attitude.
-    const orientation = Cesium.Quaternion.multiply(
-      worldOrientation,
-      this.modelCorrection,
-      new Cesium.Quaternion()
-    );
-
     this.entity.position = position;
-    this.entity.orientation = orientation;
+    this.entity.orientation = worldOrientation;
   }
 }
 
