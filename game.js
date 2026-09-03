@@ -45,10 +45,9 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
-// The glTF jet uses +Z forward and +Y up; Cesium aircraft use +X forward and
-// +Z up. This fixed cyclic-axis rotation keeps pitch, bank, and heading on
-// their proper axes instead of making pitch appear as a turn.
-const AIRCRAFT_MODEL_AXIS_CORRECTION = new Cesium.Quaternion(0.5, 0.5, 0.5, 0.5);
+// This asset needs a fixed yaw correction to match Cesium's entity frame.
+// Keep pitch and roll at zero here: the live flight attitude supplies them.
+const AIRCRAFT_MODEL_HEADING_CORRECTION_DEG = 270;
 
 // ---------------------------------------------------------------------------
 // CesiumWorld — the globe itself
@@ -215,7 +214,13 @@ class PlayerState {
 class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
-    this.modelCorrection = Cesium.Quaternion.clone(AIRCRAFT_MODEL_AXIS_CORRECTION);
+    this.modelCorrection = Cesium.Quaternion.fromHeadingPitchRoll(
+      new Cesium.HeadingPitchRoll(
+        Cesium.Math.toRadians(AIRCRAFT_MODEL_HEADING_CORRECTION_DEG),
+        0,
+        0
+      )
+    );
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
