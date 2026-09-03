@@ -45,15 +45,10 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
-// This particular .glb wasn't authored with Cesium's assumed model axes
-// (forward = +X, up = +Z), so it needs a one-time local rotation to sit
-// correctly: nose along the direction of travel, wings level. Tune these
-// in 90°/180° steps if the model ever looks off — heading is "which way the
-// nose points" (sideways = wrong heading), pitch is "nose up/down", roll is
-// "banked/on its side".
-const AIRCRAFT_MODEL_HEADING_CORRECTION_DEG = 270;
-const AIRCRAFT_MODEL_PITCH_CORRECTION_DEG = 0;
-const AIRCRAFT_MODEL_ROLL_CORRECTION_DEG = 0;
+// The glTF jet uses +Z forward and +Y up; Cesium aircraft use +X forward and
+// +Z up. This fixed cyclic-axis rotation keeps pitch, bank, and heading on
+// their proper axes instead of making pitch appear as a turn.
+const AIRCRAFT_MODEL_AXIS_CORRECTION = new Cesium.Quaternion(0.5, 0.5, 0.5, 0.5);
 
 // ---------------------------------------------------------------------------
 // CesiumWorld — the globe itself
@@ -194,7 +189,7 @@ class SpawnSelector {
 // ---------------------------------------------------------------------------
 
 class PlayerState {
-  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60 }) {
+  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60, throttle = 0.28 }) {
     this.longitude = longitude; // degrees
     this.latitude = latitude;   // degrees
     this.height = height;       // meters above ellipsoid
@@ -202,6 +197,7 @@ class PlayerState {
     this.pitch = pitch;         // radians
     this.roll = roll;           // radians
     this.speed = speed;         // meters/second (true airspeed)
+    this.throttle = throttle;   // 0–1 engine setting
     this.verticalSpeed = 0;     // meters/second, positive = climbing
   }
 
@@ -217,13 +213,7 @@ class PlayerState {
 class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
-    this.modelCorrection = Cesium.Quaternion.fromHeadingPitchRoll(
-      new Cesium.HeadingPitchRoll(
-        Cesium.Math.toRadians(AIRCRAFT_MODEL_HEADING_CORRECTION_DEG),
-        Cesium.Math.toRadians(AIRCRAFT_MODEL_PITCH_CORRECTION_DEG),
-        Cesium.Math.toRadians(AIRCRAFT_MODEL_ROLL_CORRECTION_DEG)
-      )
-    );
+    this.modelCorrection = Cesium.Quaternion.clone(AIRCRAFT_MODEL_AXIS_CORRECTION);
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -294,10 +284,9 @@ class FlightController {
     this.bankTurnStrength = 9.81;
     this.minSpeed = 35;
     this.maxSpeed = 340;
-    this.cruiseSpeed = 95;
-    this.throttleAccel = 30;
-    this.throttleDecel = 42;
-    this.speedDamping = 0.045;
+    this.throttleRate = 0.28;
+    this.engineResponse = 0.38;
+    this.brakeDecel = 55;
     this.climbResponse = 2.8;
 
     // Keys that double as page-scroll/nav shortcuts in the browser — stop
@@ -329,15 +318,16 @@ class FlightController {
     if (k.has("KeyW")) pitchInput += 1; // nose up
     if (k.has("KeyS")) pitchInput -= 1; // nose down
 
+    // A/D and the left/right arrows are deliberately identical: each banks
+    // the plane into a visible, coordinated turn in that direction.
     let rollInput = 0;
-    if (k.has("KeyA")) rollInput -= 1; // roll left
-    if (k.has("KeyD")) rollInput += 1; // roll right
+    if (k.has("KeyA") || k.has("ArrowLeft") || k.has("KeyJ")) rollInput -= 1;
+    if (k.has("KeyD") || k.has("ArrowRight") || k.has("KeyL")) rollInput += 1;
 
-    // Yaw doubles up on three schemes: Q/E, arrow left/right, and I/J/K/L
-    // (for keyboards/layouts without dedicated arrow keys).
+    // Rudder is optional fine control; normal turns come from bank.
     let yawInput = 0;
-    if (k.has("KeyQ") || k.has("ArrowLeft") || k.has("KeyJ")) yawInput -= 1; // yaw left
-    if (k.has("KeyE") || k.has("ArrowRight") || k.has("KeyL")) yawInput += 1; // yaw right
+    if (k.has("KeyQ")) yawInput -= 1;
+    if (k.has("KeyE")) yawInput += 1;
 
     // W/S and A/D request a pitch/bank angle instead of continuously adding
     // rotation. Releasing a key smoothly returns the jet toward level flight.
@@ -364,23 +354,21 @@ class FlightController {
     s.heading = Cesium.Math.negativePiToPi(s.heading);
 
     // --- Throttle / speed ---
-    // Shift/Ctrl/Space are the primary scheme; ArrowUp/ArrowDown and I/K
-    // mirror them for players who'd rather accelerate/brake with their
-    // right hand (or don't have arrow keys at all).
+    // Shift/Space increase engine power. Ctrl or Down lowers power and adds
+    // wheel-brake force, allowing a landed aircraft to stop completely.
     if (
       k.has("ShiftLeft") || k.has("ShiftRight") || k.has("Space") ||
       k.has("ArrowUp") || k.has("KeyI")
     ) {
-      s.speed += this.throttleAccel * dt;
+      s.throttle += this.throttleRate * dt;
     }
-    if (
-      k.has("ControlLeft") || k.has("ControlRight") ||
-      k.has("ArrowDown") || k.has("KeyK")
-    ) {
-      s.speed -= this.throttleDecel * dt;
-    }
-    // Settle toward cruise instead of slowing toward a stall every flight.
-    s.speed += (this.cruiseSpeed - s.speed) * this.speedDamping * dt;
+    const braking = k.has("ControlLeft") || k.has("ControlRight") ||
+      k.has("ArrowDown") || k.has("KeyK");
+    if (braking) s.throttle -= this.throttleRate * dt * 1.8;
+    s.throttle = Cesium.Math.clamp(s.throttle, 0, 1);
+    const targetSpeed = s.throttle * this.maxSpeed;
+    s.speed += (targetSpeed - s.speed) * (1 - Math.exp(-this.engineResponse * dt));
+    if (braking) s.speed -= this.brakeDecel * dt;
     s.speed = Cesium.Math.clamp(s.speed, this.minSpeed, this.maxSpeed);
 
     // --- Reset ---

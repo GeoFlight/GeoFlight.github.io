@@ -17,10 +17,10 @@ The Cesium token in `game.js` must permit the URL where the game is hosted. Repl
 | Control | Action |
 | --- | --- |
 | `W` / `S` | Pitch up / down |
-| `A` / `D` | Bank left / right |
-| `Q` / `E` or Left / Right arrows | Yaw left / right |
+| `A` / `D` or Left / Right arrows | Bank and turn left / right |
+| `Q` / `E` | Fine rudder yaw left / right |
 | `Shift`, Space, Up arrow, or `I` | Increase throttle |
-| `Ctrl`, Down arrow, or `K` | Brake / reduce throttle |
+| `Ctrl`, Down arrow, or `K` | Reduce throttle and brake (can stop on the ground) |
 | `R` | Reset to the selected spawn point |
 
 The camera follows behind and slightly above the aircraft. It uses the jet's actual direction of travel, so it remains aligned as the plane banks and turns.
