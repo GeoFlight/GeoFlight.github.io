@@ -480,8 +480,8 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 72; // meters behind the aircraft
-    this.aboveDistance = 42;  // meters above it: a clearer elevated chase view
+    this.behindDistance = 58; // meters behind the aircraft
+    this.aboveDistance = 36;  // meters above it: a closer elevated chase view
     this.travelDirection = null; // world-space unit vector aligned with flight heading
     // A wider lens gives context for the full-scale globe and prevents the
     // aircraft from filling the frame during low passes.
