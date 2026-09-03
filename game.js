@@ -189,7 +189,7 @@ class SpawnSelector {
 // ---------------------------------------------------------------------------
 
 class PlayerState {
-  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60, throttle = 0.28 }) {
+  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60, throttle = 0.018, pitchRate = 0, rollRate = 0 }) {
     this.longitude = longitude; // degrees
     this.latitude = latitude;   // degrees
     this.height = height;       // meters above ellipsoid
@@ -199,6 +199,8 @@ class PlayerState {
     this.speed = speed;         // meters/second (true airspeed)
     this.throttle = throttle;   // 0–1 engine setting
     this.verticalSpeed = 0;     // meters/second, positive = climbing
+    this.pitchRate = pitchRate; // radians/second
+    this.rollRate = rollRate;   // radians/second
   }
 
   clone() {
@@ -274,18 +276,24 @@ class FlightController {
     // after the player returns to the tab.
     window.addEventListener("blur", () => this.keys.clear());
 
-    // Assisted flight-game tuning. Controls move toward a target attitude,
-    // then self-center when released, so keyboard input remains precise.
+    // Keyboard flight model: inputs apply rotational force, then damping and
+    // light stability bring the aircraft back toward trimmed, level flight.
+    // This avoids instant attitude snaps while remaining controllable.
     this.maxPitch = Cesium.Math.toRadians(30);
     this.maxBank = Cesium.Math.toRadians(55);
-    this.pitchResponse = 3.0;
-    this.rollResponse = 4.0;
+    this.maxPitchRate = Cesium.Math.toRadians(50);
+    this.maxRollRate = Cesium.Math.toRadians(100);
+    this.pitchAcceleration = Cesium.Math.toRadians(180);
+    this.rollAcceleration = Cesium.Math.toRadians(420);
+    this.angularDamping = 2.6;
+    this.levelingStrength = 0.55;
     this.yawRate = Cesium.Math.toRadians(18);
     this.bankTurnStrength = 9.81;
-    this.minSpeed = 35;
-    this.maxSpeed = 340;
-    this.throttleRate = 0.28;
-    this.engineResponse = 0.38;
+    this.minSpeed = 0;          // braking can bring a landed aircraft to rest
+    this.maxSpeed = 3430;       // approximately Mach 10 at sea level
+    this.throttleRate = 0.12;
+    this.maxThrustAcceleration = 65;
+    this.dragCoefficient = this.maxThrustAcceleration / this.maxSpeed;
     this.brakeDecel = 55;
     this.climbResponse = 2.8;
 
@@ -329,13 +337,22 @@ class FlightController {
     if (k.has("KeyQ")) yawInput -= 1;
     if (k.has("KeyE")) yawInput += 1;
 
-    // W/S and A/D request a pitch/bank angle instead of continuously adding
-    // rotation. Releasing a key smoothly returns the jet toward level flight.
-    const response = (rate) => 1 - Math.exp(-rate * dt);
-    const targetPitch = pitchInput * this.maxPitch;
-    const targetRoll = rollInput * this.maxBank;
-    s.pitch += (targetPitch - s.pitch) * response(this.pitchResponse);
-    s.roll += (targetRoll - s.roll) * response(this.rollResponse);
+    // Integrate angular velocity instead of snapping directly to an angle.
+    // The self-leveling term is deliberately weak: it feels like a stable jet,
+    // not a camera that forcibly pops upright when a key is released.
+    s.pitchRate += (pitchInput * this.pitchAcceleration - s.pitch * this.levelingStrength) * dt;
+    s.rollRate += (rollInput * this.rollAcceleration - s.roll * this.levelingStrength) * dt;
+    const angularDecay = Math.exp(-this.angularDamping * dt);
+    s.pitchRate *= angularDecay;
+    s.rollRate *= angularDecay;
+    s.pitchRate = Cesium.Math.clamp(s.pitchRate, -this.maxPitchRate, this.maxPitchRate);
+    s.rollRate = Cesium.Math.clamp(s.rollRate, -this.maxRollRate, this.maxRollRate);
+    s.pitch += s.pitchRate * dt;
+    s.roll += s.rollRate * dt;
+    if (Math.abs(s.pitch) >= this.maxPitch) s.pitchRate = 0;
+    if (Math.abs(s.roll) >= this.maxBank) s.rollRate = 0;
+    s.pitch = Cesium.Math.clamp(s.pitch, -this.maxPitch, this.maxPitch);
+    s.roll = Cesium.Math.clamp(s.roll, -this.maxBank, this.maxBank);
 
     // Small rudder authority remains on Q/E, but normal turning is produced by
     // the bank angle above.  This also keeps the aircraft controllable at low
@@ -366,8 +383,9 @@ class FlightController {
       k.has("ArrowDown") || k.has("KeyK");
     if (braking) s.throttle -= this.throttleRate * dt * 1.8;
     s.throttle = Cesium.Math.clamp(s.throttle, 0, 1);
-    const targetSpeed = s.throttle * this.maxSpeed;
-    s.speed += (targetSpeed - s.speed) * (1 - Math.exp(-this.engineResponse * dt));
+    // Thrust and drag, rather than a forced target speed. Full power reaches
+    // the Mach 10 cap naturally; a low initial throttle holds takeoff speed.
+    s.speed += (s.throttle * this.maxThrustAcceleration - s.speed * this.dragCoefficient) * dt;
     if (braking) s.speed -= this.brakeDecel * dt;
     s.speed = Cesium.Math.clamp(s.speed, this.minSpeed, this.maxSpeed);
 
@@ -382,7 +400,8 @@ class FlightController {
     // assisted rather than a full aerodynamic simulation: it is smooth and
     // predictable with a keyboard while bank still produces real turns.
     const desiredVerticalSpeed = s.speed * Math.sin(s.pitch);
-    s.verticalSpeed += (desiredVerticalSpeed - s.verticalSpeed) * response(this.climbResponse);
+    const climbResponse = 1 - Math.exp(-this.climbResponse * dt);
+    s.verticalSpeed += (desiredVerticalSpeed - s.verticalSpeed) * climbResponse;
     const climbRate = s.verticalSpeed * dt;
     const groundDistance = s.speed * Math.cos(s.pitch) * dt;
 
