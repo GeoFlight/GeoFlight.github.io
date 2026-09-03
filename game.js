@@ -1,5 +1,5 @@
 /* ==========================================================================
-   POLYFLIGHT — game.js
+   GEOFLIGHT — game.js
    ==========================================================================
    Architecture (kept deliberately separated so multiplayer can be bolted on
    later without a rewrite):
@@ -33,7 +33,7 @@
 // ---------------------------------------------------------------------------
 
 // Cesium ion browser token — public, "assets:read" only, restricted via
-// Cesium ion's "Allowed URLs" to the PolyFlight GitHub Pages origin.
+// Cesium ion's "Allowed URLs" to the GeoFlight GitHub Pages origin.
 // Replace with your own token before deploying.
 const CESIUM_ION_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IlhacXpNblJUY1J2eTg3U0QiLCJqdGkiOiJjNWIyNzAzZS1iY2IyLTRkZGEtYWQ2YS0yZDM1NWNmMDZmNjAiLCJpZCI6NDc3NDU1LCJzdWIiOiJwb2x5ZmxpZ2h0IiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6InBvbHlmbGlnaHQgd2ViIiwiaWF0IjoxNzg4MzgzNjIzfQ.hoBg5fsKviVL3a4u55JKuie57flzrKkSdUkRqjEOHTk";
@@ -277,6 +277,10 @@ class FlightController {
     this.keys = new Set();
     window.addEventListener("keydown", (e) => this._onKey(e, true));
     window.addEventListener("keyup", (e) => this._onKey(e, false));
+    // A keyup is not delivered when the browser loses focus. Clearing the
+    // held-key state prevents the aircraft from continuing to turn or thrust
+    // after the player returns to the tab.
+    window.addEventListener("blur", () => this.keys.clear());
 
     // Tunables — arbitrary but chosen to feel like a plane, not an ice cube.
     this.pitchRate = 1.1;      // rad/s at full input
@@ -313,10 +317,13 @@ class FlightController {
 
   reset() {
     this.state = this.spawnState.clone();
+    this.keys.delete("KeyR");
+    this.justReset = true;
   }
 
   /** Advance the flight state by dt seconds based on currently-held keys. */
   update(dt) {
+    this.justReset = false;
     const k = this.keys;
     const s = this.state;
 
@@ -358,6 +365,10 @@ class FlightController {
       const turnRate = (this.bankTurnStrength * Math.tan(s.roll)) / Math.max(s.speed, 5);
       s.heading += turnRate * dt;
     }
+
+    // Keep the heading bounded. This avoids losing precision during long
+    // flights while preserving Cesium's clockwise-from-north convention.
+    s.heading = Cesium.Math.negativePiToPi(s.heading);
 
     // Gentle auto-level on roll so the plane doesn't drift into a permanent
     // bank the way a keyboard-only control scheme otherwise would.
@@ -472,17 +483,20 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 48; // meters behind the aircraft
-    this.aboveDistance = 65;  // meters above the aircraft (raised for a fuller view of the plane)
+    this.behindDistance = 58; // meters behind the aircraft
+    this.aboveDistance = 28;  // meters above it: a useful, less top-down angle
     this.previousPosition = null;
     this.travelDirection = null; // world-space unit vector, last known direction of travel
   }
 
+  reset() {
+    this.previousPosition = null;
+    this.travelDirection = null;
+  }
+
   // Deliberately built from the aircraft's actual frame-to-frame motion
   // (rather than from state.heading directly) so the camera always sits
-  // behind and above the direction the plane is really moving — this stays
-  // correct regardless of how heading/pitch/roll map onto the model's own
-  // local axes, which is what caused the earlier side-on view.
+  // behind the direction the plane is really moving.
   follow(state) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
     const ellipsoid = this.world.viewer.scene.globe.ellipsoid;
@@ -497,8 +511,14 @@ class ChaseCamera {
     this.previousPosition = Cesium.Cartesian3.clone(position);
 
     if (!this.travelDirection) {
-      // No motion yet to derive a direction from — default to due north.
-      this.travelDirection = Cesium.Cartesian3.cross(up, Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3());
+      // No motion yet to derive a direction from. Use Cesium's local ENU
+      // frame, which also provides a valid basis at the poles.
+      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+      this.travelDirection = Cesium.Matrix4.multiplyByPointAsVector(
+        enu,
+        new Cesium.Cartesian3(Math.sin(state.heading), Math.cos(state.heading), 0),
+        new Cesium.Cartesian3()
+      );
       Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
     }
 
@@ -512,7 +532,7 @@ class ChaseCamera {
 
     const lookTarget = Cesium.Cartesian3.add(
       position,
-      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 12, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 16, new Cesium.Cartesian3()),
       new Cesium.Cartesian3()
     );
     const direction = Cesium.Cartesian3.subtract(lookTarget, cameraPosition, new Cesium.Cartesian3());
@@ -623,6 +643,7 @@ async function main() {
 
     aircraft = new Aircraft(world, AIRCRAFT_MODEL_URL);
     flightController = new FlightController(spawnState);
+    chaseCamera.reset();
     hud.show();
     flying = true;
   }
@@ -640,6 +661,8 @@ async function main() {
     if (!flying || !flightController || !aircraft) return;
 
     flightController.update(dt);
+
+    if (flightController.justReset) chaseCamera.reset();
 
     // Ground-collision clamp: keep the aircraft from passing through
     // terrain. Done here (not inside FlightController.update) since it
