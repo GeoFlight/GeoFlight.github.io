@@ -285,6 +285,8 @@ class FlightController {
     this.maxRollRate = Cesium.Math.toRadians(72);
     this.pitchAcceleration = Cesium.Math.toRadians(140);
     this.rollAcceleration = Cesium.Math.toRadians(280);
+    this.barrelRollAcceleration = Cesium.Math.toRadians(1100);
+    this.maxBarrelRollRate = Cesium.Math.toRadians(240);
     this.angularDamping = 4.2;
     this.levelingStrength = 2.4;
     this.bankTurnStrength = 13.2; // tighter, fighter-style coordinated turns
@@ -331,34 +333,58 @@ class FlightController {
     if (k.has("KeyA") || k.has("ArrowLeft") || k.has("KeyJ")) rollInput -= 1;
     if (k.has("KeyD") || k.has("ArrowRight") || k.has("KeyL")) rollInput += 1;
 
+    // Z/X are dedicated aerobatic aileron-roll controls. Keeping them apart
+    // from A/D preserves precise, banked turns for ordinary flying.
+    let barrelInput = 0;
+    if (k.has("KeyZ")) barrelInput -= 1;
+    if (k.has("KeyX")) barrelInput += 1;
+
     // Integrate angular velocity instead of snapping directly to an angle.
     // The self-leveling term is deliberately weak: it feels like a stable jet,
     // not a camera that forcibly pops upright when a key is released.
     s.pitchRate += (pitchInput * this.pitchAcceleration - s.pitch * this.levelingStrength) * dt;
     s.rollRate += (rollInput * this.rollAcceleration - s.roll * this.levelingStrength) * dt;
+    if (barrelInput !== 0) {
+      s.rollRate += barrelInput * this.barrelRollAcceleration * dt;
+      // A barrel roll carries a little positive pitch, giving it a shallow
+      // spiral rather than a purely flat, arcade-style spin.
+      s.pitchRate += Cesium.Math.toRadians(26) * dt;
+    }
     const angularDecay = Math.exp(-this.angularDamping * dt);
     s.pitchRate *= angularDecay;
     s.rollRate *= angularDecay;
     s.pitchRate = Cesium.Math.clamp(s.pitchRate, -this.maxPitchRate, this.maxPitchRate);
-    s.rollRate = Cesium.Math.clamp(s.rollRate, -this.maxRollRate, this.maxRollRate);
+    const rollRateLimit = barrelInput === 0 ? this.maxRollRate : this.maxBarrelRollRate;
+    s.rollRate = Cesium.Math.clamp(s.rollRate, -rollRateLimit, rollRateLimit);
     s.pitch += s.pitchRate * dt;
     s.roll += s.rollRate * dt;
     // Keyboard banking is momentary: once A/D is released, quickly return
     // the visual model to level flight instead of leaving it side-on.
-    if (rollInput === 0) {
+    if (rollInput === 0 && barrelInput === 0) {
       const levelBlend = 1 - Math.exp(-7.5 * dt);
       s.roll += (0 - s.roll) * levelBlend;
       s.rollRate *= 1 - levelBlend;
     }
     if (Math.abs(s.pitch) >= this.maxPitch) s.pitchRate = 0;
-    if (Math.abs(s.roll) >= this.maxBank) s.rollRate = 0;
+    if (barrelInput === 0 && rollInput !== 0 && Math.abs(s.roll) >= this.maxBank) {
+      s.rollRate = 0;
+    }
     s.pitch = Cesium.Math.clamp(s.pitch, -this.maxPitch, this.maxPitch);
-    s.roll = Cesium.Math.clamp(s.roll, -this.maxBank, this.maxBank);
+    // After a barrel roll, ease back to level; do not snap an inverted model
+    // straight to the normal-turn bank limit on the first released frame.
+    s.roll = barrelInput === 0 && rollInput !== 0
+      ? Cesium.Math.clamp(s.roll, -this.maxBank, this.maxBank)
+      : Cesium.Math.negativePiToPi(s.roll);
 
     // A banked turn follows the coordinated-turn relationship:
     // turn rate = g × tan(bank) / airspeed.
-    if (Math.abs(s.roll) > Cesium.Math.toRadians(0.5)) {
-      const turnRate = (this.bankTurnStrength * Math.tan(s.roll)) / Math.max(s.speed, 5);
+    const turnBank = Cesium.Math.clamp(
+      Math.asin(Math.sin(s.roll)),
+      -this.maxBank,
+      this.maxBank
+    );
+    if (Math.abs(turnBank) > Cesium.Math.toRadians(0.5)) {
+      const turnRate = (this.bankTurnStrength * Math.tan(turnBank)) / Math.max(s.speed, 5);
       s.heading += turnRate * dt;
     }
 
