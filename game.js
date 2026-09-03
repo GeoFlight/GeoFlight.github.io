@@ -45,9 +45,9 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
-// This asset needs a fixed yaw correction to match Cesium's entity frame.
-// Keep pitch and roll at zero here: the live flight attitude supplies them.
-const AIRCRAFT_MODEL_HEADING_CORRECTION_DEG = 270;
+// The model uses glTF axes (+Z forward, +Y up); the Cesium aircraft frame is
+// +X forward, +Z up. This makes W/S pitch the nose and A/D bank the wings.
+const AIRCRAFT_MODEL_AXIS_CORRECTION = new Cesium.Quaternion(0.5, 0.5, 0.5, 0.5);
 
 // ---------------------------------------------------------------------------
 // CesiumWorld — the globe itself
@@ -214,13 +214,7 @@ class PlayerState {
 class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
-    this.modelCorrection = Cesium.Quaternion.fromHeadingPitchRoll(
-      new Cesium.HeadingPitchRoll(
-        Cesium.Math.toRadians(AIRCRAFT_MODEL_HEADING_CORRECTION_DEG),
-        0,
-        0
-      )
-    );
+    this.modelCorrection = Cesium.Quaternion.clone(AIRCRAFT_MODEL_AXIS_CORRECTION);
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -285,15 +279,14 @@ class FlightController {
     // light stability bring the aircraft back toward trimmed, level flight.
     // This avoids instant attitude snaps while remaining controllable.
     this.maxPitch = Cesium.Math.toRadians(22);
-    this.maxBank = Cesium.Math.toRadians(35);
+    this.maxBank = Cesium.Math.toRadians(45);
     this.maxPitchRate = Cesium.Math.toRadians(36);
     this.maxRollRate = Cesium.Math.toRadians(64);
     this.pitchAcceleration = Cesium.Math.toRadians(140);
     this.rollAcceleration = Cesium.Math.toRadians(250);
     this.angularDamping = 4.2;
     this.levelingStrength = 2.4;
-    this.yawRate = Cesium.Math.toRadians(18);
-    this.bankTurnStrength = 9.81;
+    this.bankTurnStrength = 14.7; // responsive ~1.5 g assisted jet turns
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 3430;       // approximately Mach 10 at sea level
     this.throttleRate = 0.12;
@@ -337,11 +330,6 @@ class FlightController {
     if (k.has("KeyA") || k.has("ArrowLeft") || k.has("KeyJ")) rollInput -= 1;
     if (k.has("KeyD") || k.has("ArrowRight") || k.has("KeyL")) rollInput += 1;
 
-    // Rudder is optional fine control; normal turns come from bank.
-    let yawInput = 0;
-    if (k.has("KeyQ")) yawInput -= 1;
-    if (k.has("KeyE")) yawInput += 1;
-
     // Integrate angular velocity instead of snapping directly to an angle.
     // The self-leveling term is deliberately weak: it feels like a stable jet,
     // not a camera that forcibly pops upright when a key is released.
@@ -358,11 +346,6 @@ class FlightController {
     if (Math.abs(s.roll) >= this.maxBank) s.rollRate = 0;
     s.pitch = Cesium.Math.clamp(s.pitch, -this.maxPitch, this.maxPitch);
     s.roll = Cesium.Math.clamp(s.roll, -this.maxBank, this.maxBank);
-
-    // Small rudder authority remains on Q/E, but normal turning is produced by
-    // the bank angle above.  This also keeps the aircraft controllable at low
-    // bank angles without allowing instant sideways steering.
-    s.heading += yawInput * this.yawRate * dt;
 
     // A banked turn follows the coordinated-turn relationship:
     // turn rate = g × tan(bank) / airspeed.

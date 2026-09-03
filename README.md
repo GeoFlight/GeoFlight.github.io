@@ -18,7 +18,6 @@ The Cesium token in `game.js` must permit the URL where the game is hosted. Repl
 | --- | --- |
 | `W` / `S` | Pitch up / down |
 | `A` / `D` or Left / Right arrows | Bank and turn left / right |
-| `Q` / `E` | Fine rudder yaw left / right |
 | `Shift`, Space, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake (can stop on the ground) |
 | `R` | Reset to the selected spawn point |
