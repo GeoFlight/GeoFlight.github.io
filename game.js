@@ -284,14 +284,14 @@ class FlightController {
     // Keyboard flight model: inputs apply rotational force, then damping and
     // light stability bring the aircraft back toward trimmed, level flight.
     // This avoids instant attitude snaps while remaining controllable.
-    this.maxPitch = Cesium.Math.toRadians(30);
-    this.maxBank = Cesium.Math.toRadians(55);
-    this.maxPitchRate = Cesium.Math.toRadians(50);
-    this.maxRollRate = Cesium.Math.toRadians(100);
-    this.pitchAcceleration = Cesium.Math.toRadians(180);
-    this.rollAcceleration = Cesium.Math.toRadians(420);
-    this.angularDamping = 2.6;
-    this.levelingStrength = 0.55;
+    this.maxPitch = Cesium.Math.toRadians(22);
+    this.maxBank = Cesium.Math.toRadians(35);
+    this.maxPitchRate = Cesium.Math.toRadians(36);
+    this.maxRollRate = Cesium.Math.toRadians(64);
+    this.pitchAcceleration = Cesium.Math.toRadians(140);
+    this.rollAcceleration = Cesium.Math.toRadians(250);
+    this.angularDamping = 4.2;
+    this.levelingStrength = 2.4;
     this.yawRate = Cesium.Math.toRadians(18);
     this.bankTurnStrength = 9.81;
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
@@ -487,8 +487,16 @@ class ChaseCamera {
 
     if (this.previousPosition) {
       const delta = Cesium.Cartesian3.subtract(position, this.previousPosition, new Cesium.Cartesian3());
-      if (Cesium.Cartesian3.magnitude(delta) > 0.01) {
-        this.travelDirection = Cesium.Cartesian3.normalize(delta, new Cesium.Cartesian3());
+      // Follow horizontal travel only. Including climb/descent in this vector
+      // swings the camera below or above the jet when W/S is pressed.
+      const verticalComponent = Cesium.Cartesian3.multiplyByScalar(
+        up,
+        Cesium.Cartesian3.dot(delta, up),
+        new Cesium.Cartesian3()
+      );
+      const horizontalDelta = Cesium.Cartesian3.subtract(delta, verticalComponent, new Cesium.Cartesian3());
+      if (Cesium.Cartesian3.magnitude(horizontalDelta) > 0.01) {
+        this.travelDirection = Cesium.Cartesian3.normalize(horizontalDelta, new Cesium.Cartesian3());
       }
     }
     this.previousPosition = Cesium.Cartesian3.clone(position);
