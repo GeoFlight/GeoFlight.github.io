@@ -42,7 +42,7 @@ const AIRCRAFT_MODEL_URL = "assets/planes/jet.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
 // The source model is authored in meters. Keeping it close to 1:1 avoids the
 // aircraft reading like a giant object next to the terrain and globe.
-const AIRCRAFT_MODEL_SCALE = 1.25;
+const AIRCRAFT_MODEL_SCALE = 1.0;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
@@ -229,9 +229,15 @@ class Aircraft {
   /** Push a PlayerState onto the Cesium entity for this frame. */
   render(state) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
-    // Cesium has already normalized the glTF axes, so each control maps
-    // directly to its matching visual axis.
-    const hpr = new Cesium.HeadingPitchRoll(state.heading, state.pitch, state.roll);
+    // Cesium's heading-zero entity axis faces local east, whereas flight
+    // heading zero in this game is north. Correct that heading offset here
+    // (not as a model-local rotation) so the camera follows behind the nose
+    // and W/S/A/D keep their normal pitch/bank axes.
+    const hpr = new Cesium.HeadingPitchRoll(
+      state.heading - Cesium.Math.PI_OVER_TWO,
+      state.pitch,
+      state.roll
+    );
     const worldOrientation = Cesium.Transforms.headingPitchRollQuaternion(
       position,
       hpr,
