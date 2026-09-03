@@ -40,7 +40,9 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/jet.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
-const AIRCRAFT_MODEL_SCALE = 8.0;      // tune to taste once the model is in-scene
+// The source model is authored in meters. Keeping it close to 1:1 avoids the
+// aircraft reading like a giant object next to the terrain and globe.
+const AIRCRAFT_MODEL_SCALE = 1.25;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
 // This particular .glb wasn't authored with Cesium's assumed model axes
@@ -228,7 +230,7 @@ class Aircraft {
       model: {
         uri: modelUrl,
         scale: AIRCRAFT_MODEL_SCALE,
-        minimumPixelSize: 48,
+        minimumPixelSize: 0,
         runAnimations: false,
       },
       orientation: Cesium.Quaternion.IDENTITY,
@@ -282,26 +284,21 @@ class FlightController {
     // after the player returns to the tab.
     window.addEventListener("blur", () => this.keys.clear());
 
-    // Tunables — arbitrary but chosen to feel like a plane, not an ice cube.
-    this.pitchRate = 1.1;      // rad/s at full input
-    this.rollRate = 2.0;       // rad/s at full input
-    this.yawRate = 0.12;       // gentle rudder/yaw authority; turns come from banking
-    this.bankTurnStrength = 9.81; // m/s^2 equivalent lift/gravity used for coordinated turns
-    this.minSpeed = 0;         // m/s — allows a landed aircraft to come to a complete stop
-    this.maxSpeed = 3430;       // m/s — approximately Mach 10 at sea level
-    this.throttleAccel = 65;   // m/s^2 while throttle held
-    this.throttleDecel = 80;   // m/s^2 while brake held
-    this.dragDecel = 3;        // m/s^2 passive drag toward a stop
-    this.rollAutoLevel = 0.15; // gentle self-leveling so roll doesn't run away
-
-    // Simple aerodynamic model: lift falls rapidly with airspeed, so an
-    // aircraft with no airspeed can no longer magically hover in place.
-    this.gravity = 9.81;
-    this.referenceSpeed = 60;      // m/s: roughly the speed for 1g level flight
-    this.liftBase = 1.0;
-    this.liftAoA = 4.0;             // lift increase per radian of angle of attack
-    this.maxLift = 2.5;             // avoid absurd arcade-style acceleration
-    this.verticalDrag = 0.35;
+    // Assisted flight-game tuning. Controls move toward a target attitude,
+    // then self-center when released, so keyboard input remains precise.
+    this.maxPitch = Cesium.Math.toRadians(30);
+    this.maxBank = Cesium.Math.toRadians(55);
+    this.pitchResponse = 3.0;
+    this.rollResponse = 4.0;
+    this.yawRate = Cesium.Math.toRadians(18);
+    this.bankTurnStrength = 9.81;
+    this.minSpeed = 35;
+    this.maxSpeed = 340;
+    this.cruiseSpeed = 95;
+    this.throttleAccel = 30;
+    this.throttleDecel = 42;
+    this.speedDamping = 0.045;
+    this.climbResponse = 2.8;
 
     // Keys that double as page-scroll/nav shortcuts in the browser — stop
     // them from scrolling the page while the aircraft is being flown.
@@ -327,7 +324,7 @@ class FlightController {
     const k = this.keys;
     const s = this.state;
 
-    // --- Rotational input ---
+    // --- Assisted attitude controls ---
     let pitchInput = 0;
     if (k.has("KeyW")) pitchInput += 1; // nose up
     if (k.has("KeyS")) pitchInput -= 1; // nose down
@@ -342,26 +339,22 @@ class FlightController {
     if (k.has("KeyQ") || k.has("ArrowLeft") || k.has("KeyJ")) yawInput -= 1; // yaw left
     if (k.has("KeyE") || k.has("ArrowRight") || k.has("KeyL")) yawInput += 1; // yaw right
 
-    // Pitch only changes the aircraft's nose angle.  It does NOT change heading,
-    // so W/S cannot accidentally make the aircraft yaw sideways.
-    s.pitch += pitchInput * this.pitchRate * dt;
-
-    // A/D is a true bank input.  The aircraft turns because its lift vector
-    // is tilted by the bank angle, rather than because we directly rotate the
-    // nose left/right like a car.
-    s.roll += rollInput * this.rollRate * dt;
-    const maxBank = Cesium.Math.toRadians(85);
-    s.roll = Cesium.Math.clamp(s.roll, -maxBank, maxBank);
+    // W/S and A/D request a pitch/bank angle instead of continuously adding
+    // rotation. Releasing a key smoothly returns the jet toward level flight.
+    const response = (rate) => 1 - Math.exp(-rate * dt);
+    const targetPitch = pitchInput * this.maxPitch;
+    const targetRoll = rollInput * this.maxBank;
+    s.pitch += (targetPitch - s.pitch) * response(this.pitchResponse);
+    s.roll += (targetRoll - s.roll) * response(this.rollResponse);
 
     // Small rudder authority remains on Q/E, but normal turning is produced by
     // the bank angle above.  This also keeps the aircraft controllable at low
     // bank angles without allowing instant sideways steering.
     s.heading += yawInput * this.yawRate * dt;
 
-    // Coordinated banked turn: heading rate ~= g*tan(bank)/airspeed.
-    // Use the current speed so high-speed aircraft make wider, more realistic
-    // turns.  A tiny floor prevents division by zero while stationary.
-    if (Math.abs(s.roll) > Cesium.Math.toRadians(1) && s.speed > 1) {
+    // A banked turn follows the coordinated-turn relationship:
+    // turn rate = g × tan(bank) / airspeed.
+    if (Math.abs(s.roll) > Cesium.Math.toRadians(0.5)) {
       const turnRate = (this.bankTurnStrength * Math.tan(s.roll)) / Math.max(s.speed, 5);
       s.heading += turnRate * dt;
     }
@@ -369,16 +362,6 @@ class FlightController {
     // Keep the heading bounded. This avoids losing precision during long
     // flights while preserving Cesium's clockwise-from-north convention.
     s.heading = Cesium.Math.negativePiToPi(s.heading);
-
-    // Gentle auto-level on roll so the plane doesn't drift into a permanent
-    // bank the way a keyboard-only control scheme otherwise would.
-    if (rollInput === 0) {
-      s.roll -= s.roll * Math.min(1, this.rollAutoLevel * dt * 4);
-    }
-
-    // Clamp pitch so the aircraft can't flip nose-through-tail instantly.
-    const maxPitch = Cesium.Math.toRadians(45);
-    s.pitch = Cesium.Math.clamp(s.pitch, -maxPitch, maxPitch);
 
     // --- Throttle / speed ---
     // Shift/Ctrl/Space are the primary scheme; ArrowUp/ArrowDown and I/K
@@ -396,10 +379,8 @@ class FlightController {
     ) {
       s.speed -= this.throttleDecel * dt;
     }
-    // Passive drag pulls speed back toward minSpeed so it doesn't idle at max.
-    if (s.speed > this.minSpeed) {
-      s.speed -= this.dragDecel * dt * 0.15;
-    }
+    // Settle toward cruise instead of slowing toward a stall every flight.
+    s.speed += (this.cruiseSpeed - s.speed) * this.speedDamping * dt;
     s.speed = Cesium.Math.clamp(s.speed, this.minSpeed, this.maxSpeed);
 
     // --- Reset ---
@@ -408,27 +389,14 @@ class FlightController {
       return this.state;
     }
 
-    // --- Basic aerodynamic lift + gravity ---
-    // Pitch is the aircraft attitude; verticalSpeed is the actual flight-path
-    // speed.  This distinction is what makes the aircraft fall when it has no
-    // airspeed instead of simply moving wherever the nose points.
-    const speedRatio = Math.min(1.5, s.speed / this.referenceSpeed);
-    const flightPathAngle = Math.atan2(s.verticalSpeed, Math.max(s.speed, 0.1));
-    const angleOfAttack = s.pitch - flightPathAngle;
-    let lift = (speedRatio * speedRatio) *
-      (this.liftBase + this.liftAoA * angleOfAttack);
-    lift = Cesium.Math.clamp(lift, 0, this.maxLift);
-
-    // Banking tilts the lift vector away from vertical.
-    const verticalLift = lift * this.gravity * Math.cos(s.roll);
-    const verticalAcceleration = verticalLift - this.gravity - this.verticalDrag * s.verticalSpeed;
-    s.verticalSpeed += verticalAcceleration * dt;
-
-    // At very low airspeed the nose cannot generate useful lift. The aircraft
-    // therefore drops naturally under gravity until it reaches the terrain.
+    // --- Flight path ---
+    // Velocity follows pitch with a little inertia. This is deliberately
+    // assisted rather than a full aerodynamic simulation: it is smooth and
+    // predictable with a keyboard while bank still produces real turns.
+    const desiredVerticalSpeed = s.speed * Math.sin(s.pitch);
+    s.verticalSpeed += (desiredVerticalSpeed - s.verticalSpeed) * response(this.climbResponse);
     const climbRate = s.verticalSpeed * dt;
-    const horizontalSpeed = Math.sqrt(Math.max(0, s.speed * s.speed - s.verticalSpeed * s.verticalSpeed));
-    const groundDistance = horizontalSpeed * dt;
+    const groundDistance = s.speed * Math.cos(s.pitch) * dt;
 
     const currentCartesian = Cesium.Cartesian3.fromDegrees(s.longitude, s.latitude, s.height);
     const enuTransform = Cesium.Transforms.eastNorthUpToFixedFrame(currentCartesian);
@@ -483,10 +451,13 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 58; // meters behind the aircraft
-    this.aboveDistance = 28;  // meters above it: a useful, less top-down angle
+    this.behindDistance = 72; // meters behind the aircraft
+    this.aboveDistance = 42;  // meters above it: a clearer elevated chase view
     this.previousPosition = null;
     this.travelDirection = null; // world-space unit vector, last known direction of travel
+    // A wider lens gives context for the full-scale globe and prevents the
+    // aircraft from filling the frame during low passes.
+    this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(82);
   }
 
   reset() {
