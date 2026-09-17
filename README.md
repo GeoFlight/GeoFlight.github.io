@@ -26,4 +26,4 @@ The aircraft retains its pitch and bank after you release the controls. Use the 
 
 ## Credits
 
-Jet model by jeremy, licensed CC-BY via [Poly Pizza](https://poly.pizza/m/6fyLMORhgGK).
+F-15C Eagle (USA) model by 42manako, licensed CC-BY-NC 4.0 via [Sketchfab](https://sketchfab.com/3d-models/f-15c-eagle-usa-2ba8289816584e97875c3a8e058108b5). Non-commercial use only.

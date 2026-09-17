@@ -38,11 +38,13 @@
 const CESIUM_ION_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IlhacXpNblJUY1J2eTg3U0QiLCJqdGkiOiJjNWIyNzAzZS1iY2IyLTRkZGEtYWQ2YS0yZDM1NWNmMDZmNjAiLCJpZCI6NDc3NDU1LCJzdWIiOiJwb2x5ZmxpZ2h0IiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6InBvbHlmbGlnaHQgd2ViIiwiaWF0IjoxNzg4MzgzNjIzfQ.hoBg5fsKviVL3a4u55JKuie57flzrKkSdUkRqjEOHTk";
 
-const AIRCRAFT_MODEL_URL = "assets/planes/jet.glb";
+const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
-// The source model is authored in meters. Keeping it close to 1:1 avoids the
-// aircraft reading like a giant object next to the terrain and globe.
-const AIRCRAFT_MODEL_SCALE = 0.55;
+// This model is NOT authored in meters: it measures ~218 units nose-to-tail,
+// while a real F-15C is 19.43 m long. 19.43 / 218.5 ≈ 0.089 brings it to 1:1
+// with the terrain. Raise this slightly if you want the aircraft to read
+// bigger on screen; 0.089 is true scale.
+const AIRCRAFT_MODEL_SCALE = 0.089;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
