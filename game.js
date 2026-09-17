@@ -40,20 +40,16 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
-// This model is NOT authored in meters: it measures ~218 units nose-to-tail,
-// while a real F-15C is 19.43 m long. 19.43 / 218.5 ≈ 0.089 brings it to 1:1
-// with the terrain. Raise this slightly if you want the aircraft to read
-// bigger on screen; 0.089 is true scale.
-const AIRCRAFT_MODEL_SCALE = 0.089;
+// The model file itself has been re-baked to real-world metres (19.43 m long)
+// with its nose on the +Z axis Cesium expects, so no scaling or axis fudging
+// is needed here any more.
+const AIRCRAFT_MODEL_SCALE = 1.0;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
 // --- Model nose direction -------------------------------------------------
-// Cesium expects a model's nose along its local +X. This F-15's nose sits on
-// local +Y (i.e. pointing left), so we spin it -90 degrees about its own up
-// axis. If the nose ever comes out wrong with a different model, this is the
-// only value to change: -90 (nose was left), 90 (nose was right), 180 (nose
-// was backwards), 0 (already correct).
-const MODEL_NOSE_YAW_DEGREES = -90;
+// Should now be 0. If the nose still comes out wrong, press [ and ] in flight
+// to spin the model live — the HUD shows the angle. Put that number here.
+let MODEL_NOSE_YAW_DEGREES = 0;
 
 // --- Lighting -------------------------------------------------------------
 // Cesium lights models with the real sun, so a plane flying at dusk or on the
@@ -63,6 +59,24 @@ const LIGHT_FOLLOWS_CAMERA = true;
 const LIGHT_INTENSITY = 2.2;           // raise for a brighter aircraft
 // Ambient fill so unlit surfaces keep some shape instead of going flat black.
 const MODEL_AMBIENT = 1.0;             // 0 = no fill, 1 = full fill
+
+// --- Multiplayer ----------------------------------------------------------
+// Point this at your Render service once deployed. Must be wss:// (not ws://)
+// because GitHub Pages serves over https and browsers block mixed content.
+// Leave it as "" to run single-player with no network at all.
+const MULTIPLAYER_URL = "wss://geoflight-server.onrender.com";
+const STATE_SEND_HZ = 15;              // position updates per second
+const REMOTE_SMOOTHING = 0.18;         // 0..1 — higher snaps harder to new data
+
+// --- Combat ---------------------------------------------------------------
+const MAX_HEALTH = 100;
+const BULLET_DAMAGE = 12;
+const BULLET_SPEED = 900;              // m/s
+const BULLET_RANGE = 2500;             // meters before a round despawns
+const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
+const FIRE_INTERVAL = 0.09;            // seconds between rounds
+const HIT_RADIUS = 14;                 // meters — how close a round counts as a hit
+const RESPAWN_DELAY = 3.0;             // seconds dead before respawn
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
 // X-forward/Z-up entity frame. Do not apply another import-axis correction.
@@ -259,11 +273,10 @@ class Aircraft {
 
     // Rotation applied in the model's own frame (not the world frame), so the
     // nose lines up with Cesium's forward axis without disturbing how pitch
-    // and roll are applied below.
-    this.noseCorrection = Cesium.Quaternion.fromAxisAngle(
-      Cesium.Cartesian3.UNIT_Z,
-      Cesium.Math.toRadians(MODEL_NOSE_YAW_DEGREES)
-    );
+    // and roll are applied below. The model ships pre-aligned, so this is
+    // identity unless you nudge it with [ and ].
+    this.noseCorrection = new Cesium.Quaternion();
+    this.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -281,6 +294,20 @@ class Aircraft {
       },
       orientation: Cesium.Quaternion.IDENTITY,
     });
+  }
+
+  /** Spin the model about its own up axis. Used by the [ and ] debug keys. */
+  setNoseYaw(degrees) {
+    MODEL_NOSE_YAW_DEGREES = degrees;
+    Cesium.Quaternion.fromAxisAngle(
+      Cesium.Cartesian3.UNIT_Z,
+      Cesium.Math.toRadians(degrees),
+      this.noseCorrection
+    );
+  }
+
+  destroy() {
+    this.world.viewer.entities.remove(this.entity);
   }
 
   /** Push a PlayerState onto the Cesium entity for this frame. */
@@ -570,6 +597,538 @@ class ChaseCamera {
 }
 
 // ---------------------------------------------------------------------------
+// NetworkClient — talks to the Render-hosted WebSocket relay
+// ---------------------------------------------------------------------------
+// Deliberately dumb: it fans messages out to callbacks and reconnects on drop.
+// All game logic lives elsewhere so single-player still works with the socket
+// unavailable (bad wifi, server asleep, MULTIPLAYER_URL left blank).
+
+class NetworkClient {
+  constructor(url) {
+    this.url = url;
+    this.socket = null;
+    this.id = null;
+    this.connected = false;
+    this.players = new Map(); // id -> last known remote snapshot
+    this.onRoster = () => {};
+    this.onHit = () => {};
+    this.onStatus = () => {};
+    this._retryDelay = 1000;
+    this._lastSend = 0;
+  }
+
+  connect() {
+    if (!this.url) {
+      this.onStatus("OFFLINE");
+      return;
+    }
+    this.onStatus("CONNECTING");
+    try {
+      this.socket = new WebSocket(this.url);
+    } catch (e) {
+      this._scheduleRetry();
+      return;
+    }
+
+    this.socket.addEventListener("open", () => {
+      this.connected = true;
+      this._retryDelay = 1000;
+      this.onStatus("ONLINE");
+    });
+
+    this.socket.addEventListener("message", (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      this._handle(msg);
+    });
+
+    this.socket.addEventListener("close", () => {
+      this.connected = false;
+      this.players.clear();
+      this.onRoster(this.players);
+      this._scheduleRetry();
+    });
+
+    // 'error' always precedes 'close', so reconnection is handled there only.
+    this.socket.addEventListener("error", () => {});
+  }
+
+  _scheduleRetry() {
+    this.onStatus("RECONNECTING");
+    setTimeout(() => this.connect(), this._retryDelay);
+    // Back off up to 15s so a sleeping free-tier Render dyno isn't hammered.
+    this._retryDelay = Math.min(this._retryDelay * 1.7, 15000);
+  }
+
+  _handle(msg) {
+    switch (msg.type) {
+      case "welcome":
+        this.id = msg.id;
+        break;
+      case "roster":
+        this.players.clear();
+        for (const p of msg.players) {
+          if (p.id !== this.id) this.players.set(p.id, p);
+        }
+        this.onRoster(this.players);
+        break;
+      case "state": {
+        if (msg.id === this.id) return;
+        const existing = this.players.get(msg.id);
+        this.players.set(msg.id, Object.assign(existing || {}, msg));
+        break;
+      }
+      case "leave":
+        this.players.delete(msg.id);
+        this.onRoster(this.players);
+        break;
+      case "hit":
+        if (msg.target === this.id) this.onHit(msg);
+        break;
+      default:
+        break;
+    }
+  }
+
+  _send(obj) {
+    if (!this.connected || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify(obj));
+  }
+
+  /** Rate-limited position broadcast. Called every frame; sends at STATE_SEND_HZ. */
+  sendState(state, health, alive) {
+    const now = performance.now();
+    if (now - this._lastSend < 1000 / STATE_SEND_HZ) return;
+    this._lastSend = now;
+    this._send({
+      type: "state",
+      lon: +state.longitude.toFixed(6),
+      lat: +state.latitude.toFixed(6),
+      alt: Math.round(state.height),
+      hdg: +state.heading.toFixed(3),
+      pit: +state.pitch.toFixed(3),
+      rol: +state.roll.toFixed(3),
+      spd: Math.round(state.speed),
+      hp: health,
+      alive,
+    });
+  }
+
+  reportHit(targetId, damage) {
+    this._send({ type: "hit", target: targetId, damage });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// RemoteFleet — Cesium entities for every other player
+// ---------------------------------------------------------------------------
+// Network updates arrive ~15x a second but we render at 60, so each remote
+// aircraft is interpolated toward its latest snapshot rather than teleporting.
+
+class RemoteFleet {
+  constructor(world, network) {
+    this.world = world;
+    this.network = network;
+    this.entities = new Map(); // id -> { entity, smoothed }
+  }
+
+  /** Called every frame while flying. */
+  update() {
+    const seen = new Set();
+
+    for (const [id, snap] of this.network.players) {
+      if (snap.lon === undefined) continue;
+      seen.add(id);
+      let record = this.entities.get(id);
+
+      if (!record) {
+        record = {
+          smoothed: { lon: snap.lon, lat: snap.lat, alt: snap.alt, hdg: snap.hdg, pit: snap.pit, rol: snap.rol },
+          entity: this.world.viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(snap.lon, snap.lat, snap.alt),
+            model: {
+              uri: AIRCRAFT_MODEL_URL,
+              scale: AIRCRAFT_MODEL_SCALE,
+              minimumPixelSize: 24, // stay visible as a speck at long range
+              runAnimations: false,
+              imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
+              shadows: Cesium.ShadowMode.DISABLED,
+              color: Cesium.Color.fromCssColorString("#ffb3b3"),
+              colorBlendMode: Cesium.ColorBlendMode.MIX,
+              colorBlendAmount: 0.35,
+            },
+            label: {
+              text: id.slice(0, 6).toUpperCase(),
+              font: "12px monospace",
+              fillColor: Cesium.Color.fromCssColorString("#ff5f5f"),
+              showBackground: true,
+              backgroundColor: Cesium.Color.BLACK.withAlpha(0.45),
+              pixelOffset: new Cesium.Cartesian2(0, -34),
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 12000),
+            },
+          }),
+        };
+        this.entities.set(id, record);
+      }
+
+      const s = record.smoothed;
+      const k = REMOTE_SMOOTHING;
+      s.lon = lerpAngleDegrees(s.lon, snap.lon, k);
+      s.lat += (snap.lat - s.lat) * k;
+      s.alt += (snap.alt - s.alt) * k;
+      s.hdg = lerpAngleRadians(s.hdg, snap.hdg, k);
+      s.pit += (snap.pit - s.pit) * k;
+      s.rol = lerpAngleRadians(s.rol, snap.rol, k);
+
+      const position = Cesium.Cartesian3.fromDegrees(s.lon, s.lat, s.alt);
+      const hpr = new Cesium.HeadingPitchRoll(s.hdg - Cesium.Math.PI_OVER_TWO, s.pit, s.rol);
+      record.entity.position = position;
+      record.entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+      record.entity.model.show = snap.alive !== false;
+      record.worldPosition = position;
+    }
+
+    for (const [id, record] of this.entities) {
+      if (seen.has(id)) continue;
+      this.world.viewer.entities.remove(record.entity);
+      this.entities.delete(id);
+    }
+  }
+
+  /** Every live remote aircraft as { id, position } — used for hit testing. */
+  targets() {
+    const out = [];
+    for (const [id, record] of this.entities) {
+      if (record.worldPosition && record.entity.model.show !== false) {
+        out.push({ id, position: record.worldPosition });
+      }
+    }
+    return out;
+  }
+
+  clear() {
+    for (const [, record] of this.entities) this.world.viewer.entities.remove(record.entity);
+    this.entities.clear();
+  }
+}
+
+// Shortest-path interpolation, so a plane crossing the 180th meridian or
+// wrapping past due north doesn't whip the long way around.
+function lerpAngleDegrees(from, to, k) {
+  let delta = ((to - from + 540) % 360) - 180;
+  return from + delta * k;
+}
+
+function lerpAngleRadians(from, to, k) {
+  const TWO_PI = Math.PI * 2;
+  let delta = ((to - from + Math.PI * 3) % TWO_PI) - Math.PI;
+  return from + delta * k;
+}
+
+// ---------------------------------------------------------------------------
+// GlobeMarkers — red dots on the start-screen globe for everyone in the air
+// ---------------------------------------------------------------------------
+
+class GlobeMarkers {
+  constructor(world) {
+    this.world = world;
+    this.entities = new Map();
+    this.visible = true;
+  }
+
+  update(players) {
+    const seen = new Set();
+    for (const [id, p] of players) {
+      if (p.lon === undefined) continue;
+      seen.add(id);
+      let entity = this.entities.get(id);
+      if (!entity) {
+        entity = this.world.viewer.entities.add({
+          point: {
+            pixelSize: 11,
+            color: Cesium.Color.fromCssColorString("#ff3b30"),
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.85),
+            outlineWidth: 2,
+            // Without this, dots on the far side of the planet show through.
+            heightReference: Cesium.HeightReference.NONE,
+          },
+        });
+        this.entities.set(id, entity);
+      }
+      entity.position = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, Math.max(p.alt, 0));
+      entity.show = this.visible;
+    }
+    for (const [id, entity] of this.entities) {
+      if (seen.has(id)) continue;
+      this.world.viewer.entities.remove(entity);
+      this.entities.delete(id);
+    }
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    for (const [, entity] of this.entities) entity.show = visible;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Guns — tracer rounds, hit detection, damage
+// ---------------------------------------------------------------------------
+// Hits are decided by the shooter and reported to the server, which is the
+// cheap approach: it trusts clients. Fine for a friendly alpha; move the test
+// server-side before this is worth cheating at.
+
+class Guns {
+  constructor(world, network, fleet) {
+    this.world = world;
+    this.network = network;
+    this.fleet = fleet;
+    this.bullets = [];
+    this.cooldown = 0;
+    this.firing = false;
+    this.rounds = 0;
+    this.hits = 0;
+
+    window.addEventListener("mousedown", (e) => {
+      if (e.button === 0) this.firing = true;
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (e.button === 0) this.firing = false;
+    });
+    window.addEventListener("blur", () => (this.firing = false));
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "KeyF") this.firing = true;
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "KeyF") this.firing = false;
+    });
+  }
+
+  update(dt, state, alive) {
+    this.cooldown -= dt;
+    if (this.firing && alive && this.cooldown <= 0) {
+      this._fire(state);
+      this.cooldown = FIRE_INTERVAL;
+    }
+    this._advance(dt);
+  }
+
+  _fire(state) {
+    const origin = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(origin);
+
+    // Fire straight down the nose: heading and pitch in the local ENU frame.
+    const local = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch),
+      Math.cos(state.heading) * Math.cos(state.pitch),
+      Math.sin(state.pitch)
+    );
+    const direction = Cesium.Matrix4.multiplyByPointAsVector(enu, local, new Cesium.Cartesian3());
+    Cesium.Cartesian3.normalize(direction, direction);
+
+    // Muzzle sits ahead of the nose so the tracer doesn't clip the fuselage.
+    const muzzle = Cesium.Cartesian3.add(
+      origin,
+      Cesium.Cartesian3.multiplyByScalar(direction, 14, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+
+    const bullet = {
+      position: muzzle,
+      direction,
+      life: BULLET_LIFETIME,
+      entity: this.world.viewer.entities.add({
+        position: muzzle,
+        point: {
+          pixelSize: 5,
+          color: Cesium.Color.fromCssColorString("#ffe066"),
+          outlineColor: Cesium.Color.fromCssColorString("#ff8c1a"),
+          outlineWidth: 1,
+        },
+      }),
+    };
+    this.bullets.push(bullet);
+    this.rounds++;
+  }
+
+  _advance(dt) {
+    const step = new Cesium.Cartesian3();
+    const targets = this.fleet ? this.fleet.targets() : [];
+
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const bullet = this.bullets[i];
+      bullet.life -= dt;
+
+      Cesium.Cartesian3.multiplyByScalar(bullet.direction, BULLET_SPEED * dt, step);
+      Cesium.Cartesian3.add(bullet.position, step, bullet.position);
+      bullet.entity.position = bullet.position;
+
+      let consumed = bullet.life <= 0;
+
+      if (!consumed) {
+        for (const target of targets) {
+          if (Cesium.Cartesian3.distance(bullet.position, target.position) <= HIT_RADIUS) {
+            this.network.reportHit(target.id, BULLET_DAMAGE);
+            this.hits++;
+            consumed = true;
+            break;
+          }
+        }
+      }
+
+      if (consumed) {
+        this.world.viewer.entities.remove(bullet.entity);
+        this.bullets.splice(i, 1);
+      }
+    }
+  }
+
+  clear() {
+    for (const bullet of this.bullets) this.world.viewer.entities.remove(bullet.entity);
+    this.bullets = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MiniMap — canvas globe in the top-left corner
+// ---------------------------------------------------------------------------
+// An orthographic projection centred on the player: the hemisphere you're on
+// is drawn, and anyone over the horizon is hidden rather than drawn flat.
+
+class MiniMap {
+  constructor() {
+    this.canvas = document.getElementById("miniMap");
+    this.ctx = this.canvas ? this.canvas.getContext("2d") : null;
+    this.labelEl = document.getElementById("miniMapLabel");
+    this.size = this.canvas ? this.canvas.width : 0;
+    this.radius = this.size / 2 - 6;
+  }
+
+  show() {
+    const wrap = document.getElementById("miniMapWrap");
+    if (wrap) wrap.classList.remove("hidden");
+  }
+
+  /** Orthographic projection: returns null when the point is over the horizon. */
+  _project(lonDeg, latDeg, centerLon, centerLat) {
+    const toRad = Math.PI / 180;
+    const lon = lonDeg * toRad;
+    const lat = latDeg * toRad;
+    const lon0 = centerLon * toRad;
+    const lat0 = centerLat * toRad;
+
+    const cosC = Math.sin(lat0) * Math.sin(lat) + Math.cos(lat0) * Math.cos(lat) * Math.cos(lon - lon0);
+    if (cosC < 0) return null; // far side of the planet
+
+    const x = Math.cos(lat) * Math.sin(lon - lon0);
+    const y = Math.cos(lat0) * Math.sin(lat) - Math.sin(lat0) * Math.cos(lat) * Math.cos(lon - lon0);
+    return {
+      x: this.size / 2 + x * this.radius,
+      y: this.size / 2 - y * this.radius,
+    };
+  }
+
+  draw(state, players) {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    const c = this.size / 2;
+    ctx.clearRect(0, 0, this.size, this.size);
+
+    // Ocean disc
+    ctx.beginPath();
+    ctx.arc(c, c, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(10, 30, 52, 0.92)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(90, 220, 255, 0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Graticule every 30 degrees, clipped to the visible hemisphere.
+    ctx.strokeStyle = "rgba(90, 220, 255, 0.18)";
+    ctx.lineWidth = 1;
+    for (let lat = -60; lat <= 60; lat += 30) this._drawParallel(lat, state);
+    for (let lon = -180; lon < 180; lon += 30) this._drawMeridian(lon, state);
+
+    // Equator picked out slightly brighter for orientation.
+    ctx.strokeStyle = "rgba(90, 220, 255, 0.38)";
+    this._drawParallel(0, state);
+
+    // Other players
+    for (const [, p] of players) {
+      if (p.lon === undefined || p.alive === false) continue;
+      const pt = this._project(p.lon, p.lat, state.longitude, state.latitude);
+      if (!pt) continue;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#ff3b30";
+      ctx.fill();
+    }
+
+    // You, always dead centre, drawn as an arrow pointing along your heading.
+    ctx.save();
+    ctx.translate(c, c);
+    ctx.rotate(state.heading);
+    ctx.beginPath();
+    ctx.moveTo(0, -7);
+    ctx.lineTo(4.5, 5);
+    ctx.lineTo(0, 2.5);
+    ctx.lineTo(-4.5, 5);
+    ctx.closePath();
+    ctx.fillStyle = "#6ff2ff";
+    ctx.fill();
+    ctx.restore();
+
+    if (this.labelEl) {
+      this.labelEl.textContent = `${state.latitude.toFixed(1)}° ${state.longitude.toFixed(1)}°`;
+    }
+  }
+
+  _drawParallel(lat, state) {
+    const ctx = this.ctx;
+    let started = false;
+    ctx.beginPath();
+    for (let lon = -180; lon <= 180; lon += 4) {
+      const pt = this._project(lon, lat, state.longitude, state.latitude);
+      if (!pt) {
+        started = false;
+        continue;
+      }
+      if (!started) {
+        ctx.moveTo(pt.x, pt.y);
+        started = true;
+      } else {
+        ctx.lineTo(pt.x, pt.y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  _drawMeridian(lon, state) {
+    const ctx = this.ctx;
+    let started = false;
+    ctx.beginPath();
+    for (let lat = -90; lat <= 90; lat += 4) {
+      const pt = this._project(lon, lat, state.longitude, state.latitude);
+      if (!pt) {
+        started = false;
+        continue;
+      }
+      if (!started) {
+        ctx.moveTo(pt.x, pt.y);
+        started = true;
+      } else {
+        ctx.lineTo(pt.x, pt.y);
+      }
+    }
+    ctx.stroke();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // HUD — DOM readout of a PlayerState
 // ---------------------------------------------------------------------------
 
@@ -580,6 +1139,12 @@ class HUD {
     this.speedEl = document.getElementById("hudSpeed");
     this.latEl = document.getElementById("hudLat");
     this.lonEl = document.getElementById("hudLon");
+    this.healthEl = document.getElementById("hudHealth");
+    this.healthBarEl = document.getElementById("hudHealthBar");
+    this.playersEl = document.getElementById("hudPlayers");
+    this.netEl = document.getElementById("hudNet");
+    this.yawEl = document.getElementById("hudYaw");
+    this.bannerEl = document.getElementById("centerBanner");
   }
 
   show() {
@@ -591,6 +1156,39 @@ class HUD {
     this.speedEl.textContent = `${Math.round(state.speed)} m/s`;
     this.latEl.textContent = `${state.latitude.toFixed(4)}°`;
     this.lonEl.textContent = `${state.longitude.toFixed(4)}°`;
+  }
+
+  updateCombat(health, playerCount) {
+    const pct = Math.max(0, Math.min(100, health));
+    if (this.healthEl) this.healthEl.textContent = `${Math.round(pct)}`;
+    if (this.healthBarEl) {
+      this.healthBarEl.style.width = `${pct}%`;
+      this.healthBarEl.style.background =
+        pct > 60 ? "#4ade80" : pct > 25 ? "#fbbf24" : "#ef4444";
+    }
+    if (this.playersEl) this.playersEl.textContent = `${playerCount}`;
+  }
+
+  setNetStatus(status) {
+    if (this.netEl) this.netEl.textContent = status;
+  }
+
+  setNoseYaw(degrees) {
+    if (this.yawEl) this.yawEl.textContent = `${degrees}°`;
+  }
+
+  banner(text, durationMs = 2000) {
+    if (!this.bannerEl) return;
+    this.bannerEl.textContent = text;
+    this.bannerEl.classList.remove("hidden");
+    clearTimeout(this._bannerTimer);
+    if (durationMs > 0) {
+      this._bannerTimer = setTimeout(() => this.bannerEl.classList.add("hidden"), durationMs);
+    }
+  }
+
+  clearBanner() {
+    if (this.bannerEl) this.bannerEl.classList.add("hidden");
   }
 }
 
@@ -638,10 +1236,57 @@ async function main() {
   const world = new CesiumWorld("cesiumContainer");
   const hud = new HUD();
   const chaseCamera = new ChaseCamera(world);
+  const miniMap = new MiniMap();
+
+  const network = new NetworkClient(MULTIPLAYER_URL);
+  const globeMarkers = new GlobeMarkers(world);
+  const fleet = new RemoteFleet(world, network);
+  const guns = new Guns(world, network, fleet);
 
   let flightController = null;
   let aircraft = null;
   let flying = false;
+  let health = MAX_HEALTH;
+  let alive = true;
+  let respawnTimer = 0;
+
+  network.onStatus = (status) => hud.setNetStatus(status);
+  // Red dots on the start-screen globe show where everyone already is, so you
+  // can choose to spawn into the fight or well away from it.
+  network.onRoster = (players) => globeMarkers.update(players);
+  network.onHit = (msg) => {
+    if (!alive) return;
+    health -= msg.damage ?? BULLET_DAMAGE;
+    hud.banner("HIT", 600);
+    if (health <= 0) killPlayer();
+  };
+  network.connect();
+
+  // Nose-alignment debug keys. Should not be needed with the shipped model.
+  window.addEventListener("keydown", (e) => {
+    if (!aircraft) return;
+    if (e.code === "BracketLeft") aircraft.setNoseYaw(MODEL_NOSE_YAW_DEGREES - 15);
+    if (e.code === "BracketRight") aircraft.setNoseYaw(MODEL_NOSE_YAW_DEGREES + 15);
+    if (e.code === "BracketLeft" || e.code === "BracketRight") hud.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
+  });
+
+  function killPlayer() {
+    alive = false;
+    health = 0;
+    respawnTimer = RESPAWN_DELAY;
+    if (aircraft) aircraft.entity.model.show = false;
+    guns.clear();
+    hud.banner("DESTROYED", 0);
+  }
+
+  function respawn() {
+    alive = true;
+    health = MAX_HEALTH;
+    if (aircraft) aircraft.entity.model.show = true;
+    flightController.reset();
+    chaseCamera.reset();
+    hud.clearBanner();
+  }
 
   const startScreenUI = new StartScreenUI(async () => {
     const { longitude, latitude } = spawnSelector.selectedLonLat;
@@ -669,6 +1314,15 @@ async function main() {
     flightController = new FlightController(spawnState);
     chaseCamera.reset();
     hud.show();
+    hud.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
+    miniMap.show();
+    const crosshair = document.getElementById("crosshair");
+    if (crosshair) crosshair.classList.remove("hidden");
+    // The start-screen dots would otherwise sit inside the other aircraft now
+    // that they're drawn as real models.
+    globeMarkers.setVisible(false);
+    health = MAX_HEALTH;
+    alive = true;
     flying = true;
   }
 
@@ -699,9 +1353,20 @@ async function main() {
 
     const state = flightController.state;
 
+    if (!alive) {
+      respawnTimer -= dt;
+      if (respawnTimer <= 0) respawn();
+    }
+
     aircraft.render(state);
     chaseCamera.follow(state);
     hud.update(state);
+
+    fleet.update();
+    guns.update(dt, state, alive);
+    network.sendState(state, health, alive);
+    hud.updateCombat(health, network.players.size + 1);
+    miniMap.draw(state, network.players);
   });
 }
 

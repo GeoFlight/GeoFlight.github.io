@@ -51,6 +51,12 @@
     </div>
   </div>
 
+  <!-- ===================== MINI MAP ===================== -->
+  <div id="miniMapWrap" class="hidden">
+    <canvas id="miniMap" width="170" height="170"></canvas>
+    <div id="miniMapLabel" class="minimap-label">0.0° 0.0°</div>
+  </div>
+
   <!-- ===================== FLIGHT HUD ===================== -->
   <div id="flightHud" class="hidden">
     <div class="hud-title">GEOFLIGHT</div>
@@ -58,9 +64,23 @@
     <div class="hud-row"><span class="hud-key">SPEED</span><span id="hudSpeed" class="hud-val">0 m/s</span></div>
     <div class="hud-row"><span class="hud-key">LAT</span><span id="hudLat" class="hud-val">0.0000°</span></div>
     <div class="hud-row"><span class="hud-key">LON</span><span id="hudLon" class="hud-val">0.0000°</span></div>
-    <div class="hud-controls-hint">W/S · Pitch/loop &nbsp; A/D or ←/→ · Turn/roll<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset</div>
+
+    <div class="hud-divider"></div>
+    <div class="hud-row"><span class="hud-key">HULL</span><span id="hudHealth" class="hud-val">100</span></div>
+    <div class="health-track"><div id="hudHealthBar" class="health-fill"></div></div>
+    <div class="hud-row"><span class="hud-key">PILOTS</span><span id="hudPlayers" class="hud-val">1</span></div>
+    <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
+    <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
+
+    <div class="hud-controls-hint">W/S · Pitch/loop &nbsp; A/D or ←/→ · Turn/roll<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Click or F · Fire &nbsp; [ / ] · Nose trim</div>
   </div>
 
-  <script src="game.js?v=20260903-fighter-trim"></script>
+  <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
+  <div id="centerBanner" class="hidden"></div>
+  <div id="crosshair" class="hidden">
+    <span class="cross-h"></span><span class="cross-v"></span>
+  </div>
+
+  <script src="game.js?v=20260917-multiplayer"></script>
 </body>
 </html>

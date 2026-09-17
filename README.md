@@ -12,6 +12,19 @@ npx serve .
 
 The Cesium token in `game.js` must permit the URL where the game is hosted. Replace it with your own restricted Cesium ion token before deploying publicly.
 
+## Multiplayer
+
+The `server/` folder holds a WebSocket relay meant for Render — see
+`server/README.md` for the deploy settings. Once it's live, set
+`MULTIPLAYER_URL` at the top of `game.js` to your `wss://` service URL.
+
+Leave `MULTIPLAYER_URL` as `""` to run single-player with no network.
+
+Before you spawn, red dots on the globe show where every other pilot
+currently is. In flight, other aircraft render as tinted models with a callsign
+label, and a minimap in the top-left corner shows your position on the globe
+along with everyone else on your side of the planet.
+
 ## Controls
 
 | Control | Action |
@@ -21,6 +34,8 @@ The Cesium token in `game.js` must permit the URL where the game is hosted. Repl
 | `Shift`, Space, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
 | `R` | Reset to the selected spawn point |
+| Left click or `F` | Fire guns |
+| `[` / `]` | Nudge the model's nose alignment (debug) |
 
 The aircraft retains its pitch and bank after you release the controls. Use the opposite key to roll or pitch back to the attitude you want. The camera follows behind and slightly above the aircraft.
 
