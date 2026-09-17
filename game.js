@@ -47,6 +47,23 @@ const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the 
 const AIRCRAFT_MODEL_SCALE = 0.089;
 const MIN_TERRAIN_CLEARANCE = 3;       // meters — how close to the ground before we clamp
 
+// --- Model nose direction -------------------------------------------------
+// Cesium expects a model's nose along its local +X. This F-15's nose sits on
+// local +Y (i.e. pointing left), so we spin it -90 degrees about its own up
+// axis. If the nose ever comes out wrong with a different model, this is the
+// only value to change: -90 (nose was left), 90 (nose was right), 180 (nose
+// was backwards), 0 (already correct).
+const MODEL_NOSE_YAW_DEGREES = -90;
+
+// --- Lighting -------------------------------------------------------------
+// Cesium lights models with the real sun, so a plane flying at dusk or on the
+// sun's far side turns nearly black. A light that tracks the camera keeps the
+// aircraft readable from every angle. Set to false to go back to sunlight.
+const LIGHT_FOLLOWS_CAMERA = true;
+const LIGHT_INTENSITY = 2.2;           // raise for a brighter aircraft
+// Ambient fill so unlit surfaces keep some shape instead of going flat black.
+const MODEL_AMBIENT = 1.0;             // 0 = no fill, 1 = full fill
+
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
 // X-forward/Z-up entity frame. Do not apply another import-axis correction.
 
@@ -75,6 +92,24 @@ class CesiumWorld {
     this.viewer.scene.globe.enableLighting = true;
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
     this.viewer.scene.skyAtmosphere.show = true;
+
+    // HDR tone mapping tends to crush a dark-painted aircraft into a
+    // silhouette against bright terrain. Off gives flatter but far more
+    // readable colours on the model.
+    this.viewer.scene.highDynamicRange = false;
+
+    if (LIGHT_FOLLOWS_CAMERA) {
+      this.light = new Cesium.DirectionalLight({
+        direction: Cesium.Cartesian3.clone(this.viewer.scene.camera.directionWC),
+        intensity: LIGHT_INTENSITY,
+      });
+      this.viewer.scene.light = this.light;
+      // Re-aim it every frame so whatever the chase camera is looking at is
+      // lit from roughly over the viewer's shoulder.
+      this.viewer.scene.preRender.addEventListener(() => {
+        Cesium.Cartesian3.clone(this.viewer.scene.camera.directionWC, this.light.direction);
+      });
+    }
     // Favor steady gameplay frame rates over rendering more physical pixels
     // than the display needs. Terrain tiles can also remain a little coarser
     // while flying quickly, which reduces GPU and network pressure.
@@ -222,6 +257,14 @@ class Aircraft {
   constructor(world, modelUrl) {
     this.world = world;
 
+    // Rotation applied in the model's own frame (not the world frame), so the
+    // nose lines up with Cesium's forward axis without disturbing how pitch
+    // and roll are applied below.
+    this.noseCorrection = Cesium.Quaternion.fromAxisAngle(
+      Cesium.Cartesian3.UNIT_Z,
+      Cesium.Math.toRadians(MODEL_NOSE_YAW_DEGREES)
+    );
+
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
       model: {
@@ -229,6 +272,12 @@ class Aircraft {
         scale: AIRCRAFT_MODEL_SCALE,
         minimumPixelSize: 0,
         runAnimations: false,
+        // Ambient fill — keeps the shaded side of the fuselage from crushing
+        // to black, which is what makes an unlit model look flat and muddy.
+        imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
+        // Self-shadowing on a model this detailed mostly produces speckled
+        // artifacts rather than readable shadows.
+        shadows: Cesium.ShadowMode.DISABLED,
       },
       orientation: Cesium.Quaternion.IDENTITY,
     });
@@ -253,6 +302,11 @@ class Aircraft {
       undefined,
       new Cesium.Quaternion()
     );
+
+    // Multiplying on the right applies the nose fix in model space, after the
+    // flight orientation — so pitch and roll still act on the real nose and
+    // wing axes.
+    Cesium.Quaternion.multiply(worldOrientation, this.noseCorrection, worldOrientation);
 
     this.entity.position = position;
     this.entity.orientation = worldOrientation;
