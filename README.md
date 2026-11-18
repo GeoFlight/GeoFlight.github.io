@@ -37,7 +37,7 @@ along with everyone else on your side of the planet.
 | Left click or `F` | Fire guns |
 | `[` / `]` | Nudge the model's nose alignment (debug) |
 
-The aircraft retains its pitch and bank after you release the controls. Use the opposite key to roll or pitch back to the attitude you want. The camera follows behind and slightly above the aircraft.
+The aircraft retains its pitch and bank after you release the controls. Use the opposite key to roll or pitch back to the attitude you want. Roll, pitch, and banked turns are tuned for responsive high-G aerobatics, and the chase camera follows the nose through loops so you can see ahead. The aircraft lighting is brightened to keep its details visible against the terrain.
 
 ## Credits
 

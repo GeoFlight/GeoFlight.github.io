@@ -56,9 +56,10 @@ let MODEL_NOSE_YAW_DEGREES = 0;
 // sun's far side turns nearly black. A light that tracks the camera keeps the
 // aircraft readable from every angle. Set to false to go back to sunlight.
 const LIGHT_FOLLOWS_CAMERA = true;
-const LIGHT_INTENSITY = 2.2;           // raise for a brighter aircraft
+const LIGHT_INTENSITY = 3.2;           // raise for a brighter aircraft
 // Ambient fill so unlit surfaces keep some shape instead of going flat black.
-const MODEL_AMBIENT = 1.0;             // 0 = no fill, 1 = full fill
+const MODEL_AMBIENT = 1.4;             // image-based light multiplier
+const AIRCRAFT_BRIGHTNESS_BLEND = 0.22;
 
 // --- Multiplayer ----------------------------------------------------------
 // Point this at your Render service once deployed. Must be wss:// (not ws://)
@@ -288,6 +289,9 @@ class Aircraft {
         // Ambient fill — keeps the shaded side of the fuselage from crushing
         // to black, which is what makes an unlit model look flat and muddy.
         imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
+        color: Cesium.Color.WHITE,
+        colorBlendMode: Cesium.ColorBlendMode.MIX,
+        colorBlendAmount: AIRCRAFT_BRIGHTNESS_BLEND,
         // Self-shadowing on a model this detailed mostly produces speckled
         // artifacts rather than readable shadows.
         shadows: Cesium.ShadowMode.DISABLED,
@@ -361,14 +365,15 @@ class FlightController {
 
     // Keyboard flight model: controls apply rotational force and the aircraft
     // retains its chosen pitch/bank when released, like a trimmed fighter.
-    this.maxPitchRate = Cesium.Math.toRadians(120);
-    this.maxRollRate = Cesium.Math.toRadians(240);
-    this.pitchAcceleration = Cesium.Math.toRadians(460);
-    this.rollAcceleration = Cesium.Math.toRadians(900);
-    this.angularDamping = 4.2;
+    this.maxPitchRate = Cesium.Math.toRadians(180);
+    this.maxRollRate = Cesium.Math.toRadians(360);
+    this.pitchAcceleration = Cesium.Math.toRadians(900);
+    this.rollAcceleration = Cesium.Math.toRadians(1800);
+    this.angularDamping = 3.0;
     this.turnBankLimit = Cesium.Math.toRadians(82);
     this.bankTurnStrength = 9.81;
-    this.maxTurnRate = Cesium.Math.toRadians(26);
+    this.maxTurnLoadFactor = 8;
+    this.maxTurnRate = Cesium.Math.toRadians(75);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 3430;       // approximately Mach 10 at sea level
     this.throttleRate = 0.12;
@@ -440,14 +445,17 @@ class FlightController {
       this.turnBankLimit
     );
     if (Math.abs(turnBank) > Cesium.Math.toRadians(0.5)) {
-      // Holding brake in the air acts as an airbrake: it sheds energy and
-      // permits a tighter transient turn, similar to a fighter's high-drag
-      // maneuver. The boost only applies while a meaningful bank exists.
-      const airbrakeTurnBoost = braking ? 1.3 : 1;
+      // Cap the coordinated turn at a high but bounded load factor. The
+      // airbrake allows a tighter transient turn without an unlimited rate.
+      const airbrakeTurnBoost = braking ? 1.2 : 1;
+      const turnAcceleration = Math.min(
+        Math.abs(this.bankTurnStrength * Math.tan(turnBank)) * airbrakeTurnBoost,
+        this.maxTurnLoadFactor * 9.81
+      );
       const turnRate = Cesium.Math.clamp(
-        (this.bankTurnStrength * Math.tan(turnBank)) / Math.max(s.speed, 5),
-        -this.maxTurnRate * airbrakeTurnBoost,
-        this.maxTurnRate * airbrakeTurnBoost
+        Math.sign(turnBank) * turnAcceleration / Math.max(s.speed, 5),
+        -this.maxTurnRate,
+        this.maxTurnRate
       );
       s.heading += turnRate * dt;
     }
@@ -542,9 +550,9 @@ class FlightController {
 class ChaseCamera {
   constructor(world) {
     this.world = world;
-    this.behindDistance = 38; // meters behind the aircraft
-    this.aboveDistance = 25;  // meters above it: a close elevated chase view
-    this.travelDirection = null; // world-space unit vector aligned with flight heading
+    this.behindDistance = 42; // meters behind the aircraft
+    this.aboveDistance = 20;  // meters above it: a close elevated chase view
+    this.travelDirection = null; // world-space unit vector aligned with the aircraft nose
     // A wider lens gives context for the full-scale globe and prevents the
     // aircraft from filling the frame during low passes.
     this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(82);
@@ -554,21 +562,24 @@ class ChaseCamera {
     this.travelDirection = null;
   }
 
-  // Deliberately built from the aircraft's actual frame-to-frame motion
-  // (rather than from state.heading directly) so the camera always sits
-  // behind the direction the plane is really moving.
+  // Use the aircraft nose direction so the camera stays aligned through
+  // pitch changes and full loops.
   follow(state) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
     const ellipsoid = this.world.viewer.scene.globe.ellipsoid;
     const up = ellipsoid.geodeticSurfaceNormal(position, new Cesium.Cartesian3());
 
-    // Use the same heading that drives the flight physics. Deriving camera
-    // direction from one frame's movement can flip during terrain contact,
-    // reset, or a steep climb and causes the intermittent side-on view.
+    // Follow the full nose direction, including pitch, so the camera stays
+    // behind the aircraft and looks ahead during loops and steep climbs.
     const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+    const forwardLocal = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch),
+      Math.cos(state.heading) * Math.cos(state.pitch),
+      Math.sin(state.pitch)
+    );
     this.travelDirection = Cesium.Matrix4.multiplyByPointAsVector(
       enu,
-      new Cesium.Cartesian3(Math.sin(state.heading), Math.cos(state.heading), 0),
+      forwardLocal,
       this.travelDirection ?? new Cesium.Cartesian3()
     );
     Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
@@ -583,15 +594,32 @@ class ChaseCamera {
 
     const lookTarget = Cesium.Cartesian3.add(
       position,
-      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 16, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 45, new Cesium.Cartesian3()),
       new Cesium.Cartesian3()
     );
     const direction = Cesium.Cartesian3.subtract(lookTarget, cameraPosition, new Cesium.Cartesian3());
     Cesium.Cartesian3.normalize(direction, direction);
 
+    // Keep the horizon level in normal flight; use the aircraft's right axis
+    // as a stable fallback when the nose points almost straight up or down.
+    const cameraUp = Cesium.Cartesian3.subtract(
+      up,
+      Cesium.Cartesian3.multiplyByScalar(
+        direction,
+        Cesium.Cartesian3.dot(up, direction),
+        new Cesium.Cartesian3()
+      ),
+      new Cesium.Cartesian3()
+    );
+    if (Cesium.Cartesian3.magnitudeSquared(cameraUp) < 1e-6) {
+      const rightLocal = new Cesium.Cartesian3(Math.cos(state.heading), -Math.sin(state.heading), 0);
+      Cesium.Matrix4.multiplyByPointAsVector(enu, rightLocal, cameraUp);
+    }
+    Cesium.Cartesian3.normalize(cameraUp, cameraUp);
+
     this.world.viewer.camera.setView({
       destination: cameraPosition,
-      orientation: { direction, up },
+      orientation: { direction, up: cameraUp },
     });
   }
 }
