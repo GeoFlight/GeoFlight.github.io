@@ -14,6 +14,7 @@
 
   <!-- Cesium globe fills the whole viewport -->
   <div id="cesiumContainer"></div>
+  <button id="fullscreenToggle" class="fullscreen-toggle" type="button" aria-pressed="false">FULL SCREEN</button>
 
   <!-- ===================== START SCREEN ===================== -->
   <div id="startScreen">
@@ -72,7 +73,7 @@
     <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
     <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
 
-    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Click/F · Fire &nbsp; [ / ] · Nose trim<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Settings</div>
+    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Space/Click/F · Guns &nbsp; M · Missile &nbsp; C · Flare<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Menu</div>
   </div>
 
   <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
@@ -80,25 +81,48 @@
   <div id="crosshair" class="hidden">
     <span class="cross-h"></span><span class="cross-v"></span>
   </div>
+  <div id="weaponHud" class="weapon-hud hidden" aria-live="polite">
+    <div id="weaponLockStatus" class="weapon-lock-status">NO TARGET</div>
+    <div class="weapon-ammo">
+      <span>MSL <strong id="missileAmmo">4</strong></span>
+      <span>FLR <strong id="flareAmmo">8</strong></span>
+    </div>
+  </div>
 
   <section id="settingsMenu" class="settings-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="settings-panel">
-      <p class="settings-eyebrow">FLIGHT CONTROLS</p>
-      <h2 id="settingsTitle">SETTINGS</h2>
-      <label class="setting-control" for="steeringSensitivity">
-        <span>Steering sensitivity <output id="steeringSensitivityValue"></output></span>
-        <input id="steeringSensitivity" type="range" min="0.3" max="1.5" step="0.05" />
-      </label>
-      <label class="setting-control" for="cameraSensitivity">
-        <span>Camera sensitivity <output id="cameraSensitivityValue"></output></span>
-        <input id="cameraSensitivity" type="range" min="0.3" max="2" step="0.05" />
-      </label>
-      <p class="settings-hint">Right-drag to look around · Mouse wheel to zoom</p>
-      <button id="resumeFlightBtn" class="start-button settings-resume" type="button">RESUME FLIGHT</button>
+      <p class="settings-eyebrow">FLIGHT MENU</p>
+      <h2 id="settingsTitle">PAUSED</h2>
+      <div class="settings-tabs" role="tablist" aria-label="Flight menu">
+        <button id="pauseTabButton" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="pauseMenuPanel">PAUSE</button>
+        <button id="settingsTabButton" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="flightSettingsPanel">SETTINGS</button>
+      </div>
+      <div id="pauseMenuPanel" role="tabpanel" aria-labelledby="pauseTabButton">
+        <p class="settings-hint">Your flight is paused.</p>
+      </div>
+      <div id="flightSettingsPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabButton">
+        <label class="setting-control" for="steeringSensitivity">
+          <span>Steering sensitivity <output id="steeringSensitivityValue"></output></span>
+          <input id="steeringSensitivity" type="range" min="0.3" max="1.5" step="0.05" />
+        </label>
+        <label class="setting-control" for="cameraSensitivity">
+          <span>Camera sensitivity <output id="cameraSensitivityValue"></output></span>
+          <input id="cameraSensitivity" type="range" min="0.3" max="2" step="0.05" />
+        </label>
+        <label class="setting-control" for="fieldOfView">
+          <span>Field of view <output id="fieldOfViewValue"></output></span>
+          <input id="fieldOfView" type="range" min="50" max="100" step="1" />
+        </label>
+        <p class="settings-hint">Right-drag to look around · Mouse wheel to zoom</p>
+      </div>
+      <div class="menu-actions">
+        <button id="resumeFlightBtn" class="start-button" type="button">RESUME FLIGHT</button>
+        <button id="leaveFlightBtn" class="leave-button" type="button">LEAVE FLIGHT</button>
+      </div>
       <p class="settings-escape-hint">Press ESC to resume</p>
     </div>
   </section>
 
-  <script src="game.js?v=20261118-flight-settings"></script>
+  <script src="game.js?v=20261118-weapons"></script>
 </body>
 </html>
