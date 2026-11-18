@@ -14,9 +14,10 @@ The Cesium token in `game.js` must permit the URL where the game is hosted. Repl
 
 ## Multiplayer
 
-The `server/` folder holds a WebSocket relay meant for Render — see
-`server/README.md` for the deploy settings. Once it's live, set
-`MULTIPLAYER_URL` at the top of `game.js` to your `wss://` service URL.
+The game starts in single-player mode. To enable multiplayer, deploy the
+WebSocket relay in `server/` to Render using the steps in `server/README.md`,
+then set `MULTIPLAYER_URL` near the top of `game.js` to your service's
+`wss://` URL and publish the updated game.
 
 Leave `MULTIPLAYER_URL` as `""` to run single-player with no network.
 
@@ -35,7 +36,7 @@ position, your heading, and other pilots within the map view.
 | `Shift`, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
 | `R` | Reset to the selected spawn point |
-| Left click | Fire guns; sustained fire overheats them, then they cool down |
+| Left click or hold | Fire guns; sustained fire overheats them, then they cool down |
 | Track an aircraft, then `F` | Lock and launch a missile |
 | `C` | Deploy a flare to decoy incoming missiles |
 | `[` / `]` | Nudge the model's nose alignment (debug) |
@@ -46,7 +47,7 @@ position, your heading, and other pilots within the map view.
 
 The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Steering is tuned for a more measured jet response; use the pause menu's Settings tab to change steering and camera sensitivity or field of view. Leave Flight returns to spawn selection. The elevated chase camera smoothly follows the aircraft and can be orbited or zoomed while flying. Settings are saved in this browser.
 
-Gun rounds are rendered as 3D projectiles, inherit the aircraft's velocity, and drop under gravity. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km.
+Gun rounds are rendered as 3D projectiles, inherit the aircraft's velocity, and drop under gravity. A quick click fires at least one round; holding the button fires a stream. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km.
 
 Keep another aircraft inside the center reticle until the weapon HUD shows a lock, then press `F` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. The weapon HUD shows your remaining missiles, flares, and gun heat. The circular flight map loads OpenStreetMap tiles centered on your position, shows your heading and other pilots, and credits OpenStreetMap.
 

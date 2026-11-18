@@ -1,32 +1,34 @@
 # GeoFlight multiplayer relay
 
-Deploy this folder to Render as a **Web Service** (not a Static Site).
+## Deploy to Render
 
-## Render setup
+1. Push the project to a GitHub repository and create a Render account.
+2. In Render, select **New + → Web Service** and connect the repository.
+3. Configure the service:
 
-| Field | Value |
-| --- | --- |
-| Environment | Node |
-| Root Directory | `server` |
-| Build Command | `npm install` |
-| Start Command | `npm start` |
+   | Field | Value |
+   | --- | --- |
+   | Runtime | Node |
+   | Root Directory | `server` |
+   | Build Command | `npm ci` |
+   | Start Command | `npm start` |
 
-Render provides the port via `PORT` — don't hardcode one.
+4. Choose a plan and deploy. Render supplies the `PORT` environment variable;
+   the server listens on it automatically.
+5. Open `https://your-service-name.onrender.com/`. A healthy service responds
+   with JSON similar to `{"status":"ok","players":0}`.
+6. In `game.js`, set `MULTIPLAYER_URL` to the secure WebSocket URL for your
+   service, then publish the updated game:
 
-Once deployed, copy your service URL and put it in `game.js`:
+   ```js
+   const MULTIPLAYER_URL = "wss://your-service-name.onrender.com";
+   ```
 
-```js
-const MULTIPLAYER_URL = "wss://your-service-name.onrender.com";
-```
+Use `wss://` for the WebSocket URL, not `ws://` or `https://`. GitHub Pages is
+HTTPS and browsers block insecure WebSocket connections.
 
-It must be `wss://`, not `ws://` or `https://`. GitHub Pages serves over
-HTTPS and browsers block insecure sockets from a secure page.
-
-## Free tier note
-
-Free Render services sleep after ~15 minutes idle and take 30–60 seconds to
-wake. The client reconnects automatically with backoff, so the first player to
-join may see `RECONNECTING` for a bit before `ONLINE`.
+Free Render services may sleep when idle and take time to wake; the client
+reconnects automatically.
 
 ## Test locally
 
@@ -36,4 +38,8 @@ npm install
 npm start
 ```
 
-Then set `MULTIPLAYER_URL = "ws://localhost:8080"` while testing locally.
+Then set `MULTIPLAYER_URL` to `ws://localhost:8080` while testing locally.
+Restore the Render `wss://` address before publishing the game.
+
+The relay is an alpha implementation: it forwards player state and client
+reported hits, so it is not cheat-resistant.

@@ -65,7 +65,7 @@ const AIRCRAFT_BRIGHTNESS_BLEND = 0.22;
 // Point this at your Render service once deployed. Must be wss:// (not ws://)
 // because GitHub Pages serves over https and browsers block mixed content.
 // Leave it as "" to run single-player with no network at all.
-const MULTIPLAYER_URL = "wss://geoflight-server.onrender.com";
+const MULTIPLAYER_URL = "";
 const STATE_SEND_HZ = 15;              // position updates per second
 const REMOTE_SMOOTHING = 0.18;         // 0..1 — higher snaps harder to new data
 
@@ -1169,6 +1169,7 @@ class Guns {
     this.bullets = [];
     this.cooldown = 0;
     this.firing = false;
+    this.fireRequested = false;
     this.gunHeat = 0;
     this.gunOverheated = false;
     this.rounds = 0;
@@ -1183,17 +1184,30 @@ class Guns {
     this.lockProgress = 0;
     this.missileRequested = false;
     this.flareRequested = false;
+    this.weaponHudEl = document.getElementById("weaponHud");
+    this.flightMenuEl = document.getElementById("settingsMenu");
     this.lockStatusEl = document.getElementById("weaponLockStatus");
     this.missileAmmoEl = document.getElementById("missileAmmo");
     this.flareAmmoEl = document.getElementById("flareAmmo");
 
-    window.addEventListener("mousedown", (e) => {
-      if (e.button === 0) this.firing = true;
-    });
-    window.addEventListener("mouseup", (e) => {
+    window.addEventListener("pointerdown", (e) => {
+      if (e.isPrimary && e.button === 0 &&
+          !this.weaponHudEl.classList.contains("hidden") &&
+          this.flightMenuEl.classList.contains("hidden")) {
+        this.firing = true;
+        this.fireRequested = true;
+      }
+    }, true);
+    window.addEventListener("pointerup", (e) => {
       if (e.button === 0) this.firing = false;
-    });
+    }, true);
+    window.addEventListener("pointercancel", () => {
+      this.firing = false;
+    }, true);
     window.addEventListener("blur", () => this.cancelPendingActions());
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.cancelPendingActions();
+    });
     window.addEventListener("keydown", (e) => {
       if (e.code === "KeyF" && !e.repeat) this.missileRequested = true;
       if (e.code === "KeyC" && !e.repeat) this.flareRequested = true;
@@ -1218,7 +1232,9 @@ class Guns {
       this.flareRequested = false;
     }
 
-    if (this.firing && alive) {
+    const shouldFire = this.firing || this.fireRequested;
+    this.fireRequested = false;
+    if (shouldFire && alive) {
       if (this.gunOverheated) {
         this.gunHeat = Math.max(0, this.gunHeat - GUN_COOL_PER_SECOND * dt);
         if (this.gunHeat <= GUN_OVERHEAT_RECOVERY) this.gunOverheated = false;
@@ -1242,6 +1258,7 @@ class Guns {
 
   cancelPendingActions() {
     this.firing = false;
+    this.fireRequested = false;
     this.missileRequested = false;
     this.flareRequested = false;
   }
