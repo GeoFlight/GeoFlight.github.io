@@ -76,7 +76,10 @@ const BULLET_SPEED = 900;              // m/s
 const BULLET_RANGE = 2500;             // meters before a round despawns
 const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
 const FIRE_INTERVAL = 0.09;            // seconds between rounds
-const HIT_RADIUS = 14;                 // meters — how close a round counts as a hit
+const TRACER_INTERVAL = 5;             // only a portion of the stream is visibly traced
+const TRACER_LENGTH = 24;              // meters
+const BULLET_GRAVITY = 9.81;           // m/s²
+const HIT_RADIUS = 8;                  // meters — approximate aircraft hit radius
 const RESPAWN_DELAY = 3.0;             // seconds dead before respawn
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
@@ -1081,6 +1084,22 @@ class Guns {
     const direction = Cesium.Matrix4.multiplyByPointAsVector(enu, local, new Cesium.Cartesian3());
     Cesium.Cartesian3.normalize(direction, direction);
 
+    const aircraftVelocityLocal = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch) * state.speed,
+      Math.cos(state.heading) * Math.cos(state.pitch) * state.speed,
+      state.verticalSpeed
+    );
+    const aircraftVelocity = Cesium.Matrix4.multiplyByPointAsVector(
+      enu,
+      aircraftVelocityLocal,
+      new Cesium.Cartesian3()
+    );
+    const velocity = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.multiplyByScalar(direction, BULLET_SPEED, new Cesium.Cartesian3()),
+      aircraftVelocity,
+      new Cesium.Cartesian3()
+    );
+
     // Muzzle sits ahead of the nose so the tracer doesn't clip the fuselage.
     const muzzle = Cesium.Cartesian3.add(
       origin,
@@ -1089,16 +1108,29 @@ class Guns {
     );
 
     const bullet = {
-      position: muzzle,
-      direction,
+      position: Cesium.Cartesian3.clone(muzzle),
+      velocity,
+      distance: 0,
       life: BULLET_LIFETIME,
+      tracer: this.rounds % TRACER_INTERVAL === 0,
       entity: this.world.viewer.entities.add({
         position: muzzle,
         point: {
-          pixelSize: 5,
-          color: Cesium.Color.fromCssColorString("#ffe066"),
-          outlineColor: Cesium.Color.fromCssColorString("#ff8c1a"),
+          pixelSize: 3,
+          color: this.rounds % TRACER_INTERVAL === 0
+            ? Cesium.Color.fromCssColorString("#ffd68a")
+            : Cesium.Color.fromCssColorString("#b8c2c8"),
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
           outlineWidth: 1,
+        },
+        polyline: {
+          positions: [muzzle, muzzle],
+          width: 2,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            color: Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.75),
+            glowPower: 0.12,
+          }),
+          show: this.rounds % TRACER_INTERVAL === 0,
         },
       }),
     };
@@ -1114,15 +1146,67 @@ class Guns {
       const bullet = this.bullets[i];
       bullet.life -= dt;
 
-      Cesium.Cartesian3.multiplyByScalar(bullet.direction, BULLET_SPEED * dt, step);
+      const previousPosition = Cesium.Cartesian3.clone(bullet.position);
+      const radialUp = this.world.viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(
+        bullet.position,
+        new Cesium.Cartesian3()
+      );
+      const gravity = Cesium.Cartesian3.multiplyByScalar(radialUp, -BULLET_GRAVITY, new Cesium.Cartesian3());
+      Cesium.Cartesian3.add(
+        bullet.velocity,
+        Cesium.Cartesian3.multiplyByScalar(gravity, dt, step),
+        bullet.velocity
+      );
+      Cesium.Cartesian3.multiplyByScalar(bullet.velocity, dt, step);
       Cesium.Cartesian3.add(bullet.position, step, bullet.position);
+      bullet.distance += Cesium.Cartesian3.distance(previousPosition, bullet.position);
       bullet.entity.position = bullet.position;
+      if (bullet.tracer) {
+        const trailDirection = Cesium.Cartesian3.normalize(bullet.velocity, new Cesium.Cartesian3());
+        const trailStart = Cesium.Cartesian3.subtract(
+          bullet.position,
+          Cesium.Cartesian3.multiplyByScalar(trailDirection, TRACER_LENGTH, new Cesium.Cartesian3()),
+          new Cesium.Cartesian3()
+        );
+        bullet.entity.polyline.positions = [trailStart, bullet.position];
+      }
 
-      let consumed = bullet.life <= 0;
+      let consumed = bullet.life <= 0 || bullet.distance >= BULLET_RANGE;
+      if (!consumed) {
+        const cartographic = Cesium.Cartographic.fromCartesian(bullet.position);
+        const groundHeight = this.world.getHeightSync(
+          Cesium.Math.toDegrees(cartographic.longitude),
+          Cesium.Math.toDegrees(cartographic.latitude)
+        );
+        if (groundHeight !== undefined && cartographic.height <= groundHeight) consumed = true;
+      }
 
       if (!consumed) {
+        const segment = Cesium.Cartesian3.subtract(
+          bullet.position,
+          previousPosition,
+          new Cesium.Cartesian3()
+        );
+        const segmentLengthSquared = Cesium.Cartesian3.magnitudeSquared(segment);
         for (const target of targets) {
-          if (Cesium.Cartesian3.distance(bullet.position, target.position) <= HIT_RADIUS) {
+          const toTarget = Cesium.Cartesian3.subtract(
+            target.position,
+            previousPosition,
+            new Cesium.Cartesian3()
+          );
+          const along = segmentLengthSquared > 0
+            ? Cesium.Math.clamp(
+              Cesium.Cartesian3.dot(toTarget, segment) / segmentLengthSquared,
+              0,
+              1
+            )
+            : 0;
+          const closestPoint = Cesium.Cartesian3.add(
+            previousPosition,
+            Cesium.Cartesian3.multiplyByScalar(segment, along, new Cesium.Cartesian3()),
+            new Cesium.Cartesian3()
+          );
+          if (Cesium.Cartesian3.distance(closestPoint, target.position) <= HIT_RADIUS) {
             this.network.reportHit(target.id, BULLET_DAMAGE);
             this.hits++;
             consumed = true;

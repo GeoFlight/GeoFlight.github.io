@@ -42,6 +42,8 @@ along with everyone else on your side of the planet.
 
 The aircraft retains its pitch and bank after you release the controls. Use the opposite key to roll or pitch back to the attitude you want. Steering is tuned for a more measured jet response; use the in-game settings menu to change steering and camera sensitivity. The chase camera smoothly follows the aircraft and can be orbited or zoomed while flying. Settings are saved in this browser.
 
+Gun rounds inherit the aircraft's velocity and drop under gravity. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km.
+
 ## Credits
 
 F-15C Eagle (USA) model by 42manako, licensed CC-BY-NC 4.0 via [Sketchfab](https://sketchfab.com/3d-models/f-15c-eagle-usa-2ba8289816584e97875c3a8e058108b5). Non-commercial use only.
