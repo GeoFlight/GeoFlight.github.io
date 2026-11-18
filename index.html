@@ -72,7 +72,7 @@
     <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
     <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
 
-    <div class="hud-controls-hint">W/S · Pitch/loop &nbsp; A/D or ←/→ · Turn/roll<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Click or F · Fire &nbsp; [ / ] · Nose trim</div>
+    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Click/F · Fire &nbsp; [ / ] · Nose trim<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Settings</div>
   </div>
 
   <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
@@ -81,6 +81,24 @@
     <span class="cross-h"></span><span class="cross-v"></span>
   </div>
 
-  <script src="game.js?v=20261118-flight-camera"></script>
+  <section id="settingsMenu" class="settings-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="settings-panel">
+      <p class="settings-eyebrow">FLIGHT CONTROLS</p>
+      <h2 id="settingsTitle">SETTINGS</h2>
+      <label class="setting-control" for="steeringSensitivity">
+        <span>Steering sensitivity <output id="steeringSensitivityValue"></output></span>
+        <input id="steeringSensitivity" type="range" min="0.3" max="1.5" step="0.05" />
+      </label>
+      <label class="setting-control" for="cameraSensitivity">
+        <span>Camera sensitivity <output id="cameraSensitivityValue"></output></span>
+        <input id="cameraSensitivity" type="range" min="0.3" max="2" step="0.05" />
+      </label>
+      <p class="settings-hint">Right-drag to look around · Mouse wheel to zoom</p>
+      <button id="resumeFlightBtn" class="start-button settings-resume" type="button">RESUME FLIGHT</button>
+      <p class="settings-escape-hint">Press ESC to resume</p>
+    </div>
+  </section>
+
+  <script src="game.js?v=20261118-flight-settings"></script>
 </body>
 </html>

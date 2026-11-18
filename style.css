@@ -420,3 +420,80 @@ html, body {
   pointer-events: none;
   user-select: none;
 }
+
+/* ===================== FLIGHT SETTINGS ===================== */
+
+.settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(3, 8, 15, 0.62);
+  backdrop-filter: blur(5px);
+}
+
+.settings-panel {
+  width: min(100%, 430px);
+  padding: 28px;
+  background: rgba(9, 16, 28, 0.94);
+  border: 1px solid var(--panel-border);
+  border-top: 2px solid var(--instrument-cyan);
+  border-radius: 5px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.settings-eyebrow,
+.settings-escape-hint {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.settings-eyebrow { margin: 0 0 5px; }
+
+.settings-panel h2 {
+  margin: 0 0 26px;
+  font-size: 26px;
+  letter-spacing: 0.08em;
+}
+
+.setting-control {
+  display: block;
+  margin: 0 0 22px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.setting-control span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.setting-control output {
+  color: var(--instrument-cyan);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.setting-control input {
+  width: 100%;
+  accent-color: var(--instrument-cyan);
+  cursor: pointer;
+}
+
+.settings-hint {
+  margin: 2px 0 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.settings-resume { padding: 10px 0; }
+
+.settings-escape-hint {
+  margin: 13px 0 0;
+  text-align: center;
+}

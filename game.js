@@ -245,7 +245,7 @@ class SpawnSelector {
 // ---------------------------------------------------------------------------
 
 class PlayerState {
-  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60, throttle = 0.018, pitchRate = 0, rollRate = 0 }) {
+  constructor({ longitude, latitude, height, heading = 0, pitch = 0, roll = 0, speed = 60, throttle = 0.18, pitchRate = 0, rollRate = 0 }) {
     this.longitude = longitude; // degrees
     this.latitude = latitude;   // degrees
     this.height = height;       // meters above ellipsoid
@@ -261,6 +261,39 @@ class PlayerState {
 
   clone() {
     return new PlayerState(this);
+  }
+}
+
+const SETTINGS_STORAGE_KEY = "geoflight-flight-settings";
+
+class FlightSettings {
+  constructor() {
+    let saved = {};
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === "object") saved = parsed;
+        else console.warn("Saved flight settings are invalid; using defaults.");
+      } catch (error) {
+        console.warn("Could not read saved flight settings.", error);
+      }
+    }
+
+    this.steeringSensitivity = this._readValue(saved.steeringSensitivity, 0.65, 0.3, 1.5);
+    this.cameraSensitivity = this._readValue(saved.cameraSensitivity, 1, 0.3, 2);
+  }
+
+  _readValue(value, fallback, min, max) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? Cesium.Math.clamp(numericValue, min, max) : fallback;
+  }
+
+  save() {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+      steeringSensitivity: this.steeringSensitivity,
+      cameraSensitivity: this.cameraSensitivity,
+    }));
   }
 }
 
@@ -351,9 +384,10 @@ class Aircraft {
 // contained so it's easy to swap for a real flight model later.
 
 class FlightController {
-  constructor(initialState) {
+  constructor(initialState, settings) {
     this.state = initialState.clone();
     this.spawnState = initialState.clone();
+    this.settings = settings;
 
     this.keys = new Set();
     window.addEventListener("keydown", (e) => this._onKey(e, true));
@@ -364,22 +398,22 @@ class FlightController {
     window.addEventListener("blur", () => this.keys.clear());
 
     // Keyboard flight model: controls apply rotational force and the aircraft
-    // retains its chosen pitch/bank when released, like a trimmed fighter.
-    this.maxPitchRate = Cesium.Math.toRadians(180);
-    this.maxRollRate = Cesium.Math.toRadians(360);
-    this.pitchAcceleration = Cesium.Math.toRadians(900);
-    this.rollAcceleration = Cesium.Math.toRadians(1800);
-    this.angularDamping = 3.0;
-    this.turnBankLimit = Cesium.Math.toRadians(82);
+    // retains its chosen pitch/bank when released, like a trimmed aircraft.
+    this.maxPitchRate = Cesium.Math.toRadians(90);
+    this.maxRollRate = Cesium.Math.toRadians(150);
+    this.pitchAcceleration = Cesium.Math.toRadians(240);
+    this.rollAcceleration = Cesium.Math.toRadians(480);
+    this.angularDamping = 2.4;
+    this.turnBankLimit = Cesium.Math.toRadians(70);
     this.bankTurnStrength = 9.81;
-    this.maxTurnLoadFactor = 8;
-    this.maxTurnRate = Cesium.Math.toRadians(75);
+    this.maxTurnLoadFactor = 4;
+    this.maxTurnRate = Cesium.Math.toRadians(40);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
-    this.maxSpeed = 3430;       // approximately Mach 10 at sea level
-    this.throttleRate = 0.12;
-    this.maxThrustAcceleration = 65;
+    this.maxSpeed = 900;        // high-speed jet range, rather than a supersonic game cap
+    this.throttleRate = 0.08;
+    this.maxThrustAcceleration = 24;
     this.dragCoefficient = this.maxThrustAcceleration / this.maxSpeed;
-    this.brakeDecel = 55;
+    this.brakeDecel = 22;
     this.climbResponse = 2.8;
 
     // Keys that double as page-scroll/nav shortcuts in the browser — stop
@@ -423,13 +457,22 @@ class FlightController {
     // Integrate angular velocity instead of snapping directly to an angle.
     // The self-leveling term is deliberately weak: it feels like a stable jet,
     // not a camera that forcibly pops upright when a key is released.
-    s.pitchRate += pitchInput * this.pitchAcceleration * dt;
-    s.rollRate += rollInput * this.rollAcceleration * dt;
+    const steeringSensitivity = this.settings.steeringSensitivity;
+    s.pitchRate += pitchInput * this.pitchAcceleration * steeringSensitivity * dt;
+    s.rollRate += rollInput * this.rollAcceleration * steeringSensitivity * dt;
     const angularDecay = Math.exp(-this.angularDamping * dt);
     s.pitchRate *= angularDecay;
     s.rollRate *= angularDecay;
-    s.pitchRate = Cesium.Math.clamp(s.pitchRate, -this.maxPitchRate, this.maxPitchRate);
-    s.rollRate = Cesium.Math.clamp(s.rollRate, -this.maxRollRate, this.maxRollRate);
+    s.pitchRate = Cesium.Math.clamp(
+      s.pitchRate,
+      -this.maxPitchRate * steeringSensitivity,
+      this.maxPitchRate * steeringSensitivity
+    );
+    s.rollRate = Cesium.Math.clamp(
+      s.rollRate,
+      -this.maxRollRate * steeringSensitivity,
+      this.maxRollRate * steeringSensitivity
+    );
     s.pitch += s.pitchRate * dt;
     s.roll += s.rollRate * dt;
     // Full loops and rolls are allowed while the key is held. Wrapping keeps
@@ -454,8 +497,8 @@ class FlightController {
       );
       const turnRate = Cesium.Math.clamp(
         Math.sign(turnBank) * turnAcceleration / Math.max(s.speed, 5),
-        -this.maxTurnRate,
-        this.maxTurnRate
+        -this.maxTurnRate * steeringSensitivity,
+        this.maxTurnRate * steeringSensitivity
       );
       s.heading += turnRate * dt;
     }
@@ -548,23 +591,65 @@ class FlightController {
 // ---------------------------------------------------------------------------
 
 class ChaseCamera {
-  constructor(world) {
+  constructor(world, settings) {
     this.world = world;
-    this.behindDistance = 42; // meters behind the aircraft
-    this.aboveDistance = 20;  // meters above it: a close elevated chase view
+    this.settings = settings;
+    this.behindDistance = 72;
+    this.cameraYaw = 0;
+    this.cameraPitch = 0;
+    this.cameraElevation = Cesium.Math.toRadians(18);
+    this.minDistance = 25;
+    this.maxDistance = 180;
+    this.isDragging = false;
+    this.enabled = false;
+    this.cameraPosition = null;
     this.travelDirection = null; // world-space unit vector aligned with the aircraft nose
-    // A wider lens gives context for the full-scale globe and prevents the
-    // aircraft from filling the frame during low passes.
-    this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(82);
+    this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(70);
+
+    window.addEventListener("mousedown", (event) => {
+      if (this.enabled && event.button === 2) {
+        this.isDragging = true;
+        event.preventDefault();
+      }
+    });
+    window.addEventListener("mouseup", (event) => {
+      if (event.button === 2) this.isDragging = false;
+    });
+    window.addEventListener("blur", () => { this.isDragging = false; });
+    window.addEventListener("contextmenu", (event) => {
+      if (this.enabled) event.preventDefault();
+    });
+    window.addEventListener("mousemove", (event) => {
+      if (!this.isDragging || !this.enabled) return;
+      const sensitivity = this.settings.cameraSensitivity * 0.003;
+      this.cameraYaw -= event.movementX * sensitivity;
+      this.cameraPitch = Cesium.Math.clamp(
+        this.cameraPitch + event.movementY * sensitivity,
+        Cesium.Math.toRadians(-30),
+        Cesium.Math.toRadians(45)
+      );
+    });
+    window.addEventListener("wheel", (event) => {
+      if (!this.enabled) return;
+      this.behindDistance = Cesium.Math.clamp(
+        this.behindDistance + event.deltaY * 0.08,
+        this.minDistance,
+        this.maxDistance
+      );
+      event.preventDefault();
+    }, { passive: false });
   }
 
   reset() {
     this.travelDirection = null;
+    this.cameraPosition = null;
+    this.cameraYaw = 0;
+    this.cameraPitch = 0;
   }
 
   // Use the aircraft nose direction so the camera stays aligned through
   // pitch changes and full loops.
-  follow(state) {
+  follow(state, dt) {
     const position = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
     const ellipsoid = this.world.viewer.scene.globe.ellipsoid;
     const up = ellipsoid.geodeticSurfaceNormal(position, new Cesium.Cartesian3());
@@ -584,20 +669,58 @@ class ChaseCamera {
     );
     Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
 
-    const behindOffset = Cesium.Cartesian3.multiplyByScalar(
-      this.travelDirection, -this.behindDistance, new Cesium.Cartesian3()
+    const right = Cesium.Cartesian3.cross(
+      this.travelDirection,
+      up,
+      new Cesium.Cartesian3()
     );
-    const aboveOffset = Cesium.Cartesian3.multiplyByScalar(up, this.aboveDistance, new Cesium.Cartesian3());
-
-    const cameraPosition = Cesium.Cartesian3.add(position, behindOffset, new Cesium.Cartesian3());
-    Cesium.Cartesian3.add(cameraPosition, aboveOffset, cameraPosition);
+    if (Cesium.Cartesian3.magnitudeSquared(right) < 1e-6) {
+      Cesium.Cartesian3.clone(Cesium.Cartesian3.UNIT_X, right);
+    }
+    Cesium.Cartesian3.normalize(right, right);
+    const orbitDirection = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.multiplyByScalar(
+        this.travelDirection,
+        Math.cos(this.cameraYaw),
+        new Cesium.Cartesian3()
+      ),
+      Cesium.Cartesian3.multiplyByScalar(
+        right,
+        Math.sin(this.cameraYaw),
+        new Cesium.Cartesian3()
+      ),
+      new Cesium.Cartesian3()
+    );
+    const elevation = this.cameraElevation + this.cameraPitch;
+    const horizontalOffset = Cesium.Cartesian3.multiplyByScalar(
+      orbitDirection,
+      -Math.cos(elevation) * this.behindDistance,
+      new Cesium.Cartesian3()
+    );
+    const verticalOffset = Cesium.Cartesian3.multiplyByScalar(
+      up,
+      Math.sin(elevation) * this.behindDistance,
+      new Cesium.Cartesian3()
+    );
+    const targetCameraPosition = Cesium.Cartesian3.add(
+      position,
+      horizontalOffset,
+      new Cesium.Cartesian3()
+    );
+    Cesium.Cartesian3.add(targetCameraPosition, verticalOffset, targetCameraPosition);
 
     const lookTarget = Cesium.Cartesian3.add(
       position,
       Cesium.Cartesian3.multiplyByScalar(this.travelDirection, 45, new Cesium.Cartesian3()),
       new Cesium.Cartesian3()
     );
-    const direction = Cesium.Cartesian3.subtract(lookTarget, cameraPosition, new Cesium.Cartesian3());
+    const blend = this.cameraPosition
+      ? 1 - Math.exp(-5 * Math.min(dt, 0.1))
+      : 1;
+    this.cameraPosition = this.cameraPosition
+      ? Cesium.Cartesian3.lerp(this.cameraPosition, targetCameraPosition, blend, this.cameraPosition)
+      : Cesium.Cartesian3.clone(targetCameraPosition);
+    const direction = Cesium.Cartesian3.subtract(lookTarget, this.cameraPosition, new Cesium.Cartesian3());
     Cesium.Cartesian3.normalize(direction, direction);
 
     // Keep the horizon level in normal flight; use the aircraft's right axis
@@ -618,7 +741,7 @@ class ChaseCamera {
     Cesium.Cartesian3.normalize(cameraUp, cameraUp);
 
     this.world.viewer.camera.setView({
-      destination: cameraPosition,
+      destination: this.cameraPosition,
       orientation: { direction, up: cameraUp },
     });
   }
@@ -1220,6 +1343,60 @@ class HUD {
   }
 }
 
+class FlightSettingsMenu {
+  constructor(settings, onPause, canOpen) {
+    this.settings = settings;
+    this.onPause = onPause;
+    this.canOpen = canOpen;
+    this.el = document.getElementById("settingsMenu");
+    this.steeringInput = document.getElementById("steeringSensitivity");
+    this.cameraInput = document.getElementById("cameraSensitivity");
+    this.steeringValue = document.getElementById("steeringSensitivityValue");
+    this.cameraValue = document.getElementById("cameraSensitivityValue");
+    this.isOpen = false;
+
+    this.steeringInput.value = settings.steeringSensitivity;
+    this.cameraInput.value = settings.cameraSensitivity;
+    this._updateLabels();
+
+    this.steeringInput.addEventListener("input", () => {
+      settings.steeringSensitivity = Number(this.steeringInput.value);
+      this._updateLabels();
+      settings.save();
+    });
+    this.cameraInput.addEventListener("input", () => {
+      settings.cameraSensitivity = Number(this.cameraInput.value);
+      this._updateLabels();
+      settings.save();
+    });
+    document.getElementById("resumeFlightBtn").addEventListener("click", () => this.close());
+    window.addEventListener("keydown", (event) => {
+      if (event.code !== "Escape" || event.repeat || !this.canOpen()) return;
+      event.preventDefault();
+      if (this.isOpen) this.close();
+      else this.open();
+    });
+  }
+
+  _updateLabels() {
+    this.steeringValue.value = `${Number(this.steeringInput.value).toFixed(2)}×`;
+    this.cameraValue.value = `${Number(this.cameraInput.value).toFixed(2)}×`;
+  }
+
+  open() {
+    this.isOpen = true;
+    this.el.classList.remove("hidden");
+    this.onPause();
+    this.steeringInput.focus();
+  }
+
+  close() {
+    this.isOpen = false;
+    this.el.classList.add("hidden");
+    this.onPause();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // StartScreenUI — wires the start-screen DOM to the SpawnSelector
 // ---------------------------------------------------------------------------
@@ -1263,7 +1440,8 @@ class StartScreenUI {
 async function main() {
   const world = new CesiumWorld("cesiumContainer");
   const hud = new HUD();
-  const chaseCamera = new ChaseCamera(world);
+  const settings = new FlightSettings();
+  const chaseCamera = new ChaseCamera(world, settings);
   const miniMap = new MiniMap();
 
   const network = new NetworkClient(MULTIPLAYER_URL);
@@ -1277,6 +1455,14 @@ async function main() {
   let health = MAX_HEALTH;
   let alive = true;
   let respawnTimer = 0;
+  const settingsMenu = new FlightSettingsMenu(
+    settings,
+    () => {
+      if (flightController) flightController.keys.clear();
+      guns.firing = false;
+    },
+    () => flying
+  );
 
   network.onStatus = (status) => hud.setNetStatus(status);
   // Red dots on the start-screen globe show where everyone already is, so you
@@ -1339,8 +1525,10 @@ async function main() {
     });
 
     aircraft = new Aircraft(world, AIRCRAFT_MODEL_URL);
-    flightController = new FlightController(spawnState);
+    flightController = new FlightController(spawnState, settings);
     chaseCamera.reset();
+    chaseCamera.enabled = true;
+    world.viewer.scene.screenSpaceCameraController.enableInputs = false;
     hud.show();
     hud.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
     miniMap.show();
@@ -1365,6 +1553,7 @@ async function main() {
     lastFrameTime = now;
 
     if (!flying || !flightController || !aircraft) return;
+    if (settingsMenu.isOpen) return;
 
     flightController.update(dt);
 
@@ -1387,7 +1576,7 @@ async function main() {
     }
 
     aircraft.render(state);
-    chaseCamera.follow(state);
+    chaseCamera.follow(state, dt);
     hud.update(state);
 
     fleet.update();
