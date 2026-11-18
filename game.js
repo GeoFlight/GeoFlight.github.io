@@ -76,6 +76,9 @@ const BULLET_SPEED = 900;              // m/s
 const BULLET_RANGE = 2500;             // meters before a round despawns
 const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
 const FIRE_INTERVAL = 0.09;            // seconds between rounds
+const GUN_HEAT_PER_SECOND = 0.38;
+const GUN_COOL_PER_SECOND = 0.32;
+const GUN_OVERHEAT_RECOVERY = 0.35;
 const TRACER_INTERVAL = 5;             // only a portion of the stream is visibly traced
 const TRACER_LENGTH = 24;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
@@ -1166,6 +1169,8 @@ class Guns {
     this.bullets = [];
     this.cooldown = 0;
     this.firing = false;
+    this.gunHeat = 0;
+    this.gunOverheated = false;
     this.rounds = 0;
     this.hits = 0;
     this.missiles = [];
@@ -1190,12 +1195,8 @@ class Guns {
     });
     window.addEventListener("blur", () => this.cancelPendingActions());
     window.addEventListener("keydown", (e) => {
-      if (e.code === "KeyF" || e.code === "Space") this.firing = true;
-      if (e.code === "KeyM" && !e.repeat) this.missileRequested = true;
+      if (e.code === "KeyF" && !e.repeat) this.missileRequested = true;
       if (e.code === "KeyC" && !e.repeat) this.flareRequested = true;
-    });
-    window.addEventListener("keyup", (e) => {
-      if (e.code === "KeyF" || e.code === "Space") this.firing = false;
     });
   }
 
@@ -1217,9 +1218,21 @@ class Guns {
       this.flareRequested = false;
     }
 
-    if (this.firing && alive && this.cooldown <= 0) {
-      this._fire(state);
-      this.cooldown = FIRE_INTERVAL;
+    if (this.firing && alive) {
+      if (this.gunOverheated) {
+        this.gunHeat = Math.max(0, this.gunHeat - GUN_COOL_PER_SECOND * dt);
+        if (this.gunHeat <= GUN_OVERHEAT_RECOVERY) this.gunOverheated = false;
+      } else {
+        this.gunHeat = Math.min(1, this.gunHeat + GUN_HEAT_PER_SECOND * dt);
+        if (this.cooldown <= 0) {
+          this._fire(state);
+          this.cooldown = FIRE_INTERVAL;
+        }
+        if (this.gunHeat >= 1) this.gunOverheated = true;
+      }
+    } else {
+      this.gunHeat = Math.max(0, this.gunHeat - GUN_COOL_PER_SECOND * dt);
+      if (this.gunHeat <= GUN_OVERHEAT_RECOVERY) this.gunOverheated = false;
     }
     this._advance(dt);
     this._advanceMissiles(dt);
@@ -1236,6 +1249,8 @@ class Guns {
   resetLoadout() {
     this.missilesRemaining = MISSILE_STOCK;
     this.flaresRemaining = FLARE_STOCK;
+    this.gunHeat = 0;
+    this.gunOverheated = false;
     this.flareCooldown = 0;
     this.lockTargetId = null;
     this.lockProgress = 0;
@@ -1573,7 +1588,7 @@ class Guns {
       const targetName = this.lockTargetId.slice(0, 6).toUpperCase();
       if (this.lockProgress >= MISSILE_LOCK_TIME) {
         status = this.missilesRemaining > 0
-          ? `LOCKED ${targetName} · PRESS M`
+          ? `LOCKED ${targetName} · PRESS F`
           : "NO MISSILES · PRESS C FOR FLARES";
         locked = this.missilesRemaining > 0;
       } else {
@@ -1585,6 +1600,18 @@ class Guns {
     this.lockStatusEl.classList.toggle("locked", locked);
     this.missileAmmoEl.textContent = `${this.missilesRemaining}`;
     this.flareAmmoEl.textContent = `${this.flaresRemaining}`;
+    const heatFill = document.getElementById("gunHeatFill");
+    const gunStatus = document.getElementById("gunHeatStatus");
+    if (heatFill) {
+      heatFill.style.width = `${Math.round(this.gunHeat * 100)}%`;
+      heatFill.classList.toggle("overheated", this.gunOverheated);
+    }
+    if (gunStatus) {
+      gunStatus.textContent = this.gunOverheated
+        ? "GUN OVERHEATED · COOLING"
+        : `GUN HEAT ${Math.round(this.gunHeat * 100)}%`;
+      gunStatus.classList.toggle("overheated", this.gunOverheated);
+    }
   }
 
   showHud() {
@@ -1758,6 +1785,9 @@ class MiniMap {
     this.labelEl = document.getElementById("miniMapLabel");
     this.size = this.canvas ? this.canvas.width : 0;
     this.radius = this.size / 2 - 6;
+    this.zoom = 6;
+    this.tileSize = 256;
+    this.tileCache = new Map();
   }
 
   show() {
@@ -1770,23 +1800,50 @@ class MiniMap {
     if (wrap) wrap.classList.add("hidden");
   }
 
-  /** Orthographic projection: returns null when the point is over the horizon. */
-  _project(lonDeg, latDeg, centerLon, centerLat) {
-    const toRad = Math.PI / 180;
-    const lon = lonDeg * toRad;
-    const lat = latDeg * toRad;
-    const lon0 = centerLon * toRad;
-    const lat0 = centerLat * toRad;
-
-    const cosC = Math.sin(lat0) * Math.sin(lat) + Math.cos(lat0) * Math.cos(lat) * Math.cos(lon - lon0);
-    if (cosC < 0) return null; // far side of the planet
-
-    const x = Math.cos(lat) * Math.sin(lon - lon0);
-    const y = Math.cos(lat0) * Math.sin(lat) - Math.sin(lat0) * Math.cos(lat) * Math.cos(lon - lon0);
+  _worldPixel(longitude, latitude) {
+    const worldSize = (2 ** this.zoom) * this.tileSize;
+    const boundedLatitude = Cesium.Math.clamp(latitude, -85.05112878, 85.05112878);
+    const latitudeRadians = Cesium.Math.toRadians(boundedLatitude);
     return {
-      x: this.size / 2 + x * this.radius,
-      y: this.size / 2 - y * this.radius,
+      x: ((longitude + 180) / 360) * worldSize,
+      y: (0.5 - Math.log(
+        (1 + Math.sin(latitudeRadians)) / (1 - Math.sin(latitudeRadians))
+      ) / (4 * Math.PI)) * worldSize,
     };
+  }
+
+  _project(longitude, latitude, center) {
+    const point = this._worldPixel(longitude, latitude);
+    const worldSize = this.tileSize * (2 ** this.zoom);
+    let deltaX = point.x - center.x;
+    if (deltaX > worldSize / 2) deltaX -= worldSize;
+    if (deltaX < -worldSize / 2) deltaX += worldSize;
+    const x = this.size / 2 + deltaX;
+    const y = this.size / 2 + point.y - center.y;
+    if (Math.hypot(x - this.size / 2, y - this.size / 2) > this.radius) return null;
+    return { x, y };
+  }
+
+  _getTile(x, y) {
+    const tileCount = 2 ** this.zoom;
+    if (y < 0 || y >= tileCount) return null;
+    const wrappedX = ((x % tileCount) + tileCount) % tileCount;
+    const key = `${this.zoom}/${wrappedX}/${y}`;
+    if (this.tileCache.has(key)) return this.tileCache.get(key);
+
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      while (this.tileCache.size > 128) {
+        const oldestKey = this.tileCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.tileCache.delete(oldestKey);
+      }
+    };
+    image.onerror = () => console.warn(`Map tile failed to load: ${key}`);
+    this.tileCache.set(key, image);
+    image.src = `https://tile.openstreetmap.org/${key}.png`;
+    return image;
   }
 
   draw(state, players) {
@@ -1794,30 +1851,38 @@ class MiniMap {
     const ctx = this.ctx;
     const c = this.size / 2;
     ctx.clearRect(0, 0, this.size, this.size);
+    const center = this._worldPixel(state.longitude, state.latitude);
 
-    // Ocean disc
+    // Clip the local world map to a globe-like disc centered on the aircraft.
     ctx.beginPath();
     ctx.arc(c, c, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(10, 30, 52, 0.92)";
+    ctx.fillStyle = "#10253a";
     ctx.fill();
-    ctx.strokeStyle = "rgba(90, 220, 255, 0.55)";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Graticule every 30 degrees, clipped to the visible hemisphere.
-    ctx.strokeStyle = "rgba(90, 220, 255, 0.18)";
-    ctx.lineWidth = 1;
-    for (let lat = -60; lat <= 60; lat += 30) this._drawParallel(lat, state);
-    for (let lon = -180; lon < 180; lon += 30) this._drawMeridian(lon, state);
-
-    // Equator picked out slightly brighter for orientation.
-    ctx.strokeStyle = "rgba(90, 220, 255, 0.38)";
-    this._drawParallel(0, state);
+    ctx.save();
+    ctx.clip();
+    const firstTileX = Math.floor((center.x - this.radius) / this.tileSize);
+    const lastTileX = Math.floor((center.x + this.radius) / this.tileSize);
+    const firstTileY = Math.floor((center.y - this.radius) / this.tileSize);
+    const lastTileY = Math.floor((center.y + this.radius) / this.tileSize);
+    for (let tileY = firstTileY; tileY <= lastTileY; tileY++) {
+      for (let tileX = firstTileX; tileX <= lastTileX; tileX++) {
+        const image = this._getTile(tileX, tileY);
+        if (!image || !image.complete || image.naturalWidth === 0) continue;
+        ctx.drawImage(
+          image,
+          tileX * this.tileSize - center.x + c,
+          tileY * this.tileSize - center.y + c,
+          this.tileSize,
+          this.tileSize
+        );
+      }
+    }
+    ctx.restore();
 
     // Other players
     for (const [, p] of players) {
       if (p.lon === undefined || p.alive === false) continue;
-      const pt = this._project(p.lon, p.lat, state.longitude, state.latitude);
+      const pt = this._project(p.lon, p.lat, center);
       if (!pt) continue;
       ctx.beginPath();
       ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
@@ -1825,7 +1890,12 @@ class MiniMap {
       ctx.fill();
     }
 
-    // You, always dead centre, drawn as an arrow pointing along your heading.
+    ctx.beginPath();
+    ctx.arc(c, c, this.radius, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(90, 220, 255, 0.75)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
     ctx.save();
     ctx.translate(c, c);
     ctx.rotate(state.heading);
@@ -1840,49 +1910,13 @@ class MiniMap {
     ctx.restore();
 
     if (this.labelEl) {
-      this.labelEl.textContent = `${state.latitude.toFixed(1)}° ${state.longitude.toFixed(1)}°`;
+      const latDirection = state.latitude < 0 ? "S" : "N";
+      const lonDirection = state.longitude < 0 ? "W" : "E";
+      this.labelEl.textContent =
+        `${Math.abs(state.latitude).toFixed(3)}°${latDirection} ${Math.abs(state.longitude).toFixed(3)}°${lonDirection}`;
     }
   }
 
-  _drawParallel(lat, state) {
-    const ctx = this.ctx;
-    let started = false;
-    ctx.beginPath();
-    for (let lon = -180; lon <= 180; lon += 4) {
-      const pt = this._project(lon, lat, state.longitude, state.latitude);
-      if (!pt) {
-        started = false;
-        continue;
-      }
-      if (!started) {
-        ctx.moveTo(pt.x, pt.y);
-        started = true;
-      } else {
-        ctx.lineTo(pt.x, pt.y);
-      }
-    }
-    ctx.stroke();
-  }
-
-  _drawMeridian(lon, state) {
-    const ctx = this.ctx;
-    let started = false;
-    ctx.beginPath();
-    for (let lat = -90; lat <= 90; lat += 4) {
-      const pt = this._project(lon, lat, state.longitude, state.latitude);
-      if (!pt) {
-        started = false;
-        continue;
-      }
-      if (!started) {
-        ctx.moveTo(pt.x, pt.y);
-        started = true;
-      } else {
-        ctx.lineTo(pt.x, pt.y);
-      }
-    }
-    ctx.stroke();
-  }
 }
 
 // ---------------------------------------------------------------------------

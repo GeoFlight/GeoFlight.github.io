@@ -22,8 +22,8 @@ Leave `MULTIPLAYER_URL` as `""` to run single-player with no network.
 
 Before you spawn, red dots on the globe show where every other pilot
 currently is. In flight, other aircraft render as tinted models with a callsign
-label, and a minimap in the top-left corner shows your position on the globe
-along with everyone else on your side of the planet.
+label, and a minimap in the top-left corner shows a tiled map centered on your
+position, your heading, and other pilots within the map view.
 
 ## Controls
 
@@ -35,8 +35,8 @@ along with everyone else on your side of the planet.
 | `Shift`, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
 | `R` | Reset to the selected spawn point |
-| Space, left click, or `F` | Fire guns |
-| Track an aircraft, then `M` | Lock and launch a missile |
+| Left click | Fire guns; sustained fire overheats them, then they cool down |
+| Track an aircraft, then `F` | Lock and launch a missile |
 | `C` | Deploy a flare to decoy incoming missiles |
 | `[` / `]` | Nudge the model's nose alignment (debug) |
 | Right-drag | Orbit the chase camera |
@@ -48,7 +48,7 @@ The aircraft retains its pitch and bank after you release the controls. Hold `X`
 
 Gun rounds are rendered as 3D projectiles, inherit the aircraft's velocity, and drop under gravity. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km.
 
-Keep another aircraft inside the center reticle until the weapon HUD shows a lock, then press `M` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. The weapon HUD shows your remaining missiles and flares.
+Keep another aircraft inside the center reticle until the weapon HUD shows a lock, then press `F` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. The weapon HUD shows your remaining missiles, flares, and gun heat. The circular flight map loads OpenStreetMap tiles centered on your position, shows your heading and other pilots, and credits OpenStreetMap.
 
 ## Credits
 
