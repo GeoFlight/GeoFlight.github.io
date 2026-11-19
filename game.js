@@ -40,6 +40,8 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const COCKPIT_MODEL_URL = "assets/cockpit.glb";
+const COCKPIT_EYE_FORWARD_OFFSET = 2.2;
+const COCKPIT_EYE_HEIGHT_OFFSET = 1.65;
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
 // The model file itself has been re-baked to real-world metres (19.43 m long)
 // with its nose on the +Z axis Cesium expects, so no scaling or axis fudging
@@ -401,6 +403,13 @@ class Aircraft {
     // identity unless you nudge it with [ and ].
     this.noseCorrection = new Cesium.Quaternion();
     this.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
+    // The cockpit asset faces -Z while the aircraft model faces +Z.
+    this.cockpitAlignment = Cesium.Quaternion.fromAxisAngle(
+      Cesium.Cartesian3.UNIT_Z,
+      Math.PI,
+      new Cesium.Quaternion()
+    );
+    this.cockpitOrientation = new Cesium.Quaternion();
 
     this.entity = world.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
@@ -484,7 +493,12 @@ class Aircraft {
     this.entity.position = position;
     this.entity.orientation = worldOrientation;
     this.cockpitEntity.position = position;
-    this.cockpitEntity.orientation = Cesium.Quaternion.clone(worldOrientation);
+    Cesium.Quaternion.multiply(
+      worldOrientation,
+      this.cockpitAlignment,
+      this.cockpitOrientation
+    );
+    this.cockpitEntity.orientation = this.cockpitOrientation;
   }
 }
 
@@ -1047,27 +1061,16 @@ class ChaseCamera {
     this.firstPerson = true;
     this.lookYaw = 0;
     this.lookPitch = 0;
-    this.isDragging = false;
     this.enabled = false;
     this.cameraPosition = null;
     this.travelDirection = null; // world-space unit vector aligned with the aircraft nose
     this.applyFieldOfView();
 
-    window.addEventListener("mousedown", (event) => {
-      if (this.enabled && event.button === 2) {
-        this.isDragging = true;
-        event.preventDefault();
-      }
-    });
-    window.addEventListener("mouseup", (event) => {
-      if (event.button === 2) this.isDragging = false;
-    });
-    window.addEventListener("blur", () => { this.isDragging = false; });
-    window.addEventListener("contextmenu", (event) => {
-      if (this.enabled) event.preventDefault();
-    });
     window.addEventListener("mousemove", (event) => {
-      if (!this.isDragging || !this.enabled) return;
+      if (
+        !this.enabled ||
+        !document.getElementById("settingsMenu").classList.contains("hidden")
+      ) return;
       const sensitivity = this.settings.cameraSensitivity * 0.003;
       if (this.firstPerson) {
         this.lookYaw = Cesium.Math.negativePiToPi(this.lookYaw + event.movementX * sensitivity);
@@ -1200,14 +1203,18 @@ class ChaseCamera {
         position,
         Cesium.Cartesian3.multiplyByScalar(
           this.travelDirection,
-          -1.8,
+          COCKPIT_EYE_FORWARD_OFFSET,
           new Cesium.Cartesian3()
         ),
         new Cesium.Cartesian3()
       );
       Cesium.Cartesian3.add(
         cameraPosition,
-        Cesium.Cartesian3.multiplyByScalar(aircraftUp, 1.2, new Cesium.Cartesian3()),
+        Cesium.Cartesian3.multiplyByScalar(
+          rolledUp,
+          COCKPIT_EYE_HEIGHT_OFFSET,
+          new Cesium.Cartesian3()
+        ),
         cameraPosition
       );
       this.world.viewer.camera.setView({

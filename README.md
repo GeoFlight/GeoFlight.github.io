@@ -42,11 +42,11 @@ heading, and nearby pilots.
 | Aim at an enemy for 3 seconds, then `F` | Lock and launch a missile |
 | `C` | Deploy a flare to decoy incoming missiles |
 | `[` / `]` | Nudge the model's nose alignment (debug) |
-| Right-drag | Look around from the cockpit |
+| Move mouse | Look around from the cockpit |
 | `Esc` | Open or close in-flight settings; the online flight keeps running |
 | Full screen button | Enter or exit fullscreen |
 
-The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a controlled 180° reversal; hard banks use moderate assisted combat turning. Fly from the 3D cockpit and right-drag to look around; press `V` to switch to a chase view, where you can inspect the exterior aircraft. Remote pilots always see the exterior model. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. Settings are saved in this browser.
+The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a controlled 180° reversal; hard banks use moderate assisted combat turning. Fly from the separate 3D cockpit and move the mouse to look around without holding a button; press `V` to switch to a chase view, where you can inspect the exterior aircraft. Remote pilots always see the exterior model. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. Settings are saved in this browser.
 
 Gun rounds use bright fireball sprites and glowing trails, inherit the aircraft's velocity, and drop under gravity. A quick click fires at least one round; holding the button fires a stream. Rounds despawn after traveling 12 km. Multiplayer pilots also see the same visible bullets, missiles, and flares. The gun HUD below the crosshair is just the heat bar.
 
