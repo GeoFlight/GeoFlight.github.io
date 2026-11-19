@@ -106,7 +106,11 @@ wss.on("connection", (ws) => {
 // messages; this exists so the start screen can show red dots for everyone
 // before you've spawned, and so a client that missed an update recovers.
 setInterval(() => {
-  const roster = [...players.values()].filter((p) => p.lon !== undefined);
+  const roster = [...players.values()]
+    .filter((p) => p.lon !== undefined)
+    .map(({ id, lon, lat, alt, hdg, pit, rol, spd, hp, alive }) => ({
+      id, lon, lat, alt, hdg, pit, rol, spd, hp, alive,
+    }));
   broadcast({ type: "roster", players: roster });
 }, ROSTER_MS);
 

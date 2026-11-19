@@ -65,13 +65,20 @@ const AIRCRAFT_BRIGHTNESS_BLEND = 0.22;
 // Point this at your Render service once deployed. Must be wss:// (not ws://)
 // because GitHub Pages serves over https and browsers block mixed content.
 // Leave it as "" to run single-player with no network at all.
-const MULTIPLAYER_URL = "";
+const MULTIPLAYER_URL = "wss://geoflight-github-io.onrender.com";
 const STATE_SEND_HZ = 15;              // position updates per second
 const REMOTE_SMOOTHING = 0.18;         // 0..1 — higher snaps harder to new data
 
 // --- Combat ---------------------------------------------------------------
 const MAX_HEALTH = 100;
 const BULLET_DAMAGE = 12;
+const LOW_HEALTH_SMOKE_THRESHOLD = 40;
+const SMOKE_EMISSION_RATE = 12;
+const SMOKE_PARTICLE_LIFETIME = 3;
+const DEATH_SCREEN_DURATION = 3;
+const EXPLOSION_PARTICLE_COUNT = 26;
+const EXPLOSION_PARTICLE_LIFETIME = 1.6;
+const QUICK_TURN_DURATION = 1.25;
 const BULLET_SPEED = 900;              // m/s
 const BULLET_RANGE = 2500;             // meters before a round despawns
 const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
@@ -84,8 +91,8 @@ const TRACER_LENGTH = 24;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
 const HIT_RADIUS = 8;                  // meters — approximate aircraft hit radius
 const MISSILE_DAMAGE = 40;
-const MISSILE_LOCK_TIME = 1.5;
-const MISSILE_LOCK_CONE = Cesium.Math.toRadians(9);
+const MISSILE_LOCK_TIME = 3;
+const MISSILE_LOCK_CONE = Cesium.Math.toRadians(12);
 const MISSILE_LOCK_RANGE = 6000;
 const MISSILE_MAX_TURN_RATE = Cesium.Math.toRadians(75);
 const MISSILE_INITIAL_BOOST = 300;      // m/s added to the aircraft's velocity
@@ -98,7 +105,6 @@ const FLARE_STOCK = 8;
 const FLARE_COOLDOWN = 0.5;
 const FLARE_LIFETIME = 4;
 const FLARE_DECOY_RANGE = 350;
-const RESPAWN_DELAY = 3.0;             // seconds dead before respawn
 
 function orientationAlongDirection(direction) {
   const normalized = Cesium.Cartesian3.normalize(direction, new Cesium.Cartesian3());
@@ -420,6 +426,299 @@ class Aircraft {
   }
 }
 
+class DamageSmoke {
+  constructor(world) {
+    this.collection = world.viewer.scene.primitives.add(new Cesium.BillboardCollection());
+    this.particles = [];
+    this.emissionRemainder = 0;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create the aircraft smoke texture.");
+
+    const gradient = context.createRadialGradient(32, 32, 1, 32, 32, 32);
+    gradient.addColorStop(0, "rgba(45, 45, 45, 0.72)");
+    gradient.addColorStop(0.45, "rgba(65, 65, 65, 0.42)");
+    gradient.addColorStop(1, "rgba(85, 85, 85, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    this.image = canvas.toDataURL("image/png");
+  }
+
+  update(dt, state, enabled) {
+    this._advance(dt);
+    if (!enabled) return;
+
+    this.emissionRemainder += dt * SMOKE_EMISSION_RATE;
+    while (this.emissionRemainder >= 1) {
+      this.emissionRemainder -= 1;
+      this._emit(state);
+    }
+  }
+
+  clear() {
+    for (const particle of this.particles) this.collection.remove(particle.billboard);
+    this.particles.length = 0;
+    this.emissionRemainder = 0;
+  }
+
+  _advance(dt) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const particle = this.particles[i];
+      particle.age += dt;
+      if (particle.age >= particle.lifetime) {
+        this.collection.remove(particle.billboard);
+        this.particles.splice(i, 1);
+        continue;
+      }
+
+      Cesium.Cartesian3.add(
+        particle.position,
+        Cesium.Cartesian3.multiplyByScalar(particle.velocity, dt, new Cesium.Cartesian3()),
+        particle.position
+      );
+      const progress = particle.age / particle.lifetime;
+      particle.billboard.position = particle.position;
+      particle.billboard.scale = 0.7 + progress * 2;
+      particle.billboard.color = Cesium.Color.WHITE.withAlpha(0.62 * (1 - progress) ** 1.5);
+    }
+  }
+
+  _emit(state) {
+    const position = Cesium.Cartesian3.fromDegrees(
+      state.longitude,
+      state.latitude,
+      state.height
+    );
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position);
+    const localForward = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch),
+      Math.cos(state.heading) * Math.cos(state.pitch),
+      Math.sin(state.pitch)
+    );
+    const forward = Cesium.Cartesian3.normalize(
+      Cesium.Matrix4.multiplyByPointAsVector(enu, localForward, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+      position,
+      new Cesium.Cartesian3()
+    );
+    const right = Cesium.Cartesian3.cross(forward, up, new Cesium.Cartesian3());
+    if (Cesium.Cartesian3.magnitudeSquared(right) < 1e-6) {
+      Cesium.Matrix4.multiplyByPointAsVector(enu, Cesium.Cartesian3.UNIT_X, right);
+    }
+    Cesium.Cartesian3.normalize(right, right);
+
+    const localVelocity = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch) * state.speed,
+      Math.cos(state.heading) * Math.cos(state.pitch) * state.speed,
+      state.verticalSpeed
+    );
+    const aircraftVelocity = Cesium.Matrix4.multiplyByPointAsVector(
+      enu,
+      localVelocity,
+      new Cesium.Cartesian3()
+    );
+    const tailPosition = Cesium.Cartesian3.add(
+      Cesium.Cartesian3.subtract(
+        position,
+        Cesium.Cartesian3.multiplyByScalar(forward, 18, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      ),
+      Cesium.Cartesian3.multiplyByScalar(up, 2, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    const lateralOffset = (Math.random() - 0.5) * 5;
+    const particlePosition = Cesium.Cartesian3.add(
+      tailPosition,
+      Cesium.Cartesian3.multiplyByScalar(right, lateralOffset, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    const velocity = Cesium.Cartesian3.multiplyByScalar(
+      aircraftVelocity,
+      0.82,
+      new Cesium.Cartesian3()
+    );
+    Cesium.Cartesian3.add(
+      velocity,
+      Cesium.Cartesian3.multiplyByScalar(up, 4 + Math.random() * 4, new Cesium.Cartesian3()),
+      velocity
+    );
+    Cesium.Cartesian3.add(
+      velocity,
+      Cesium.Cartesian3.multiplyByScalar(right, lateralOffset, new Cesium.Cartesian3()),
+      velocity
+    );
+
+    const billboard = this.collection.add({
+      position: particlePosition,
+      image: this.image,
+      width: 8,
+      height: 8,
+      sizeInMeters: true,
+      color: Cesium.Color.WHITE.withAlpha(0.62),
+    });
+    this.particles.push({
+      billboard,
+      position: particlePosition,
+      velocity,
+      age: 0,
+      lifetime: SMOKE_PARTICLE_LIFETIME * (0.75 + Math.random() * 0.5),
+    });
+  }
+}
+
+class AircraftExplosion {
+  constructor(world) {
+    this.collection = world.viewer.scene.primitives.add(new Cesium.BillboardCollection());
+    this.particles = [];
+    this.image = this._createImage();
+    this.colors = [
+      Cesium.Color.fromCssColorString("#fff4b0"),
+      Cesium.Color.fromCssColorString("#ffb02e"),
+      Cesium.Color.fromCssColorString("#ff5a1f"),
+      Cesium.Color.fromCssColorString("#b82916"),
+    ];
+  }
+
+  start(state) {
+    this.clear();
+    const origin = Cesium.Cartesian3.fromDegrees(
+      state.longitude,
+      state.latitude,
+      state.height
+    );
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(origin);
+    const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(
+      origin,
+      new Cesium.Cartesian3()
+    );
+    const localVelocity = new Cesium.Cartesian3(
+      Math.sin(state.heading) * Math.cos(state.pitch) * state.speed,
+      Math.cos(state.heading) * Math.cos(state.pitch) * state.speed,
+      state.verticalSpeed
+    );
+    const inheritedVelocity = Cesium.Cartesian3.multiplyByScalar(
+      Cesium.Matrix4.multiplyByPointAsVector(enu, localVelocity, new Cesium.Cartesian3()),
+      0.25,
+      new Cesium.Cartesian3()
+    );
+
+    for (let i = 0; i < EXPLOSION_PARTICLE_COUNT; i++) {
+      const localDirection = Cesium.Cartesian3.normalize(
+        new Cesium.Cartesian3(
+          Math.random() * 2 - 1,
+          Math.random() * 2 - 1,
+          0.2 + Math.random() * 1.3
+        ),
+        new Cesium.Cartesian3()
+      );
+      const direction = Cesium.Cartesian3.normalize(
+        Cesium.Matrix4.multiplyByPointAsVector(enu, localDirection, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      const position = Cesium.Cartesian3.add(
+        origin,
+        Cesium.Cartesian3.multiplyByScalar(direction, Math.random() * 6, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      const velocity = Cesium.Cartesian3.add(
+        inheritedVelocity,
+        Cesium.Cartesian3.multiplyByScalar(
+          direction,
+          25 + Math.random() * 45,
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      Cesium.Cartesian3.add(
+        velocity,
+        Cesium.Cartesian3.multiplyByScalar(up, 6 + Math.random() * 12, new Cesium.Cartesian3()),
+        velocity
+      );
+
+      const color = this.colors[i % this.colors.length];
+      const billboard = this.collection.add({
+        position,
+        image: this.image,
+        width: 10 + Math.random() * 10,
+        height: 10 + Math.random() * 10,
+        sizeInMeters: true,
+        color: color.withAlpha(0.95),
+      });
+      this.particles.push({
+        billboard,
+        color,
+        position,
+        velocity,
+        gravity: Cesium.Cartesian3.multiplyByScalar(up, -24, new Cesium.Cartesian3()),
+        age: 0,
+        lifetime: EXPLOSION_PARTICLE_LIFETIME * (0.65 + Math.random() * 0.35),
+      });
+    }
+  }
+
+  update(dt) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const particle = this.particles[i];
+      particle.age += dt;
+      if (particle.age >= particle.lifetime) {
+        this.collection.remove(particle.billboard);
+        this.particles.splice(i, 1);
+        continue;
+      }
+
+      Cesium.Cartesian3.add(
+        particle.velocity,
+        Cesium.Cartesian3.multiplyByScalar(
+          particle.gravity,
+          dt,
+          new Cesium.Cartesian3()
+        ),
+        particle.velocity
+      );
+      Cesium.Cartesian3.add(
+        particle.position,
+        Cesium.Cartesian3.multiplyByScalar(
+          particle.velocity,
+          dt,
+          new Cesium.Cartesian3()
+        ),
+        particle.position
+      );
+      const progress = particle.age / particle.lifetime;
+      particle.billboard.position = particle.position;
+      particle.billboard.scale = 0.8 + progress * 1.5;
+      particle.billboard.color = particle.color.withAlpha(0.95 * (1 - progress));
+    }
+  }
+
+  clear() {
+    for (const particle of this.particles) this.collection.remove(particle.billboard);
+    this.particles.length = 0;
+  }
+
+  _createImage() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create the aircraft explosion texture.");
+
+    const gradient = context.createRadialGradient(32, 32, 1, 32, 32, 32);
+    gradient.addColorStop(0, "rgba(255, 255, 230, 1)");
+    gradient.addColorStop(0.2, "rgba(255, 190, 45, 0.95)");
+    gradient.addColorStop(0.55, "rgba(235, 65, 20, 0.72)");
+    gradient.addColorStop(1, "rgba(110, 20, 0, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FlightController — keyboard input -> PlayerState integration
 // ---------------------------------------------------------------------------
@@ -433,6 +732,9 @@ class FlightController {
     this.settings = settings;
 
     this.keys = new Set();
+    this.quickTurnRemaining = 0;
+    this.quickTurnDirection = 1;
+    this.quickTurnStartRoll = 0;
     window.addEventListener("keydown", (e) => this._onKey(e, true));
     window.addEventListener("keyup", (e) => this._onKey(e, false));
     // A keyup is not delivered when the browser loses focus. Clearing the
@@ -449,8 +751,8 @@ class FlightController {
     this.angularDamping = 2.4;
     this.turnBankLimit = Cesium.Math.toRadians(70);
     this.bankTurnStrength = 9.81;
-    this.maxTurnLoadFactor = 4;
-    this.maxTurnRate = Cesium.Math.toRadians(40);
+    this.maxTurnLoadFactor = 12;
+    this.maxTurnRate = Cesium.Math.toRadians(105);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 900;        // high-speed jet range, rather than a supersonic game cap
     this.throttleRate = 0.16;
@@ -468,12 +770,26 @@ class FlightController {
 
   _onKey(e, isDown) {
     if (this.preventDefaultKeys.has(e.code)) e.preventDefault();
+    if (!document.getElementById("settingsMenu").classList.contains("hidden")) {
+      this.keys.delete(e.code);
+      return;
+    }
+    if (e.code === "KeyQ") {
+      if (isDown && !e.repeat && this.quickTurnRemaining <= 0) {
+        this.quickTurnDirection = Math.sign(Math.sin(this.state.roll)) || 1;
+        this.quickTurnStartRoll = this.state.roll;
+        this.quickTurnRemaining = QUICK_TURN_DURATION;
+      }
+      return;
+    }
     this.keys[isDown ? "add" : "delete"](e.code);
   }
 
   reset() {
     this.state = this.spawnState.clone();
     this.keys.delete("KeyR");
+    this.quickTurnRemaining = 0;
+    this.quickTurnStartRoll = this.state.roll;
     this.justReset = true;
   }
 
@@ -493,6 +809,8 @@ class FlightController {
     let rollInput = 0;
     if (k.has("KeyA") || k.has("ArrowLeft") || k.has("KeyJ")) rollInput -= 1;
     if (k.has("KeyD") || k.has("ArrowRight") || k.has("KeyL")) rollInput += 1;
+    const quickTurnActive = this.quickTurnRemaining > 0;
+    if (quickTurnActive) rollInput = 0;
 
     const braking = k.has("ControlLeft") || k.has("ControlRight") ||
       k.has("ArrowDown") || k.has("KeyK");
@@ -531,23 +849,35 @@ class FlightController {
     s.pitch = Cesium.Math.negativePiToPi(s.pitch);
     s.roll = Cesium.Math.negativePiToPi(s.roll);
 
-    // A banked turn follows the coordinated-turn relationship:
-    // turn rate = g × tan(bank) / airspeed.
+    // Bank drives a combat-assisted turn, with capped effective airspeed to
+    // keep hard reversals responsive even at higher flight speeds.
     const turnBank = Cesium.Math.clamp(
       Math.asin(Math.sin(s.roll)),
       -this.turnBankLimit,
       this.turnBankLimit
     );
-    if (Math.abs(turnBank) > Cesium.Math.toRadians(0.5)) {
-      // Cap the coordinated turn at a high but bounded load factor. The
-      // airbrake allows a tighter transient turn without an unlimited rate.
+    if (quickTurnActive) {
+      const step = Math.min(dt, this.quickTurnRemaining);
+      const remainingAfter = Math.max(0, this.quickTurnRemaining - step);
+      const progress = 1 - remainingAfter / QUICK_TURN_DURATION;
+      const targetRoll = this.quickTurnStartRoll +
+        this.quickTurnDirection * this.turnBankLimit * Math.sin(Math.PI * progress);
+      const rollError = Cesium.Math.negativePiToPi(targetRoll - s.roll);
+      s.roll = Cesium.Math.negativePiToPi(targetRoll);
+      s.rollRate = remainingAfter > 0 && dt > 0 ? rollError / dt : 0;
+      s.heading += this.quickTurnDirection * Math.PI * (step / QUICK_TURN_DURATION);
+      this.quickTurnRemaining = remainingAfter;
+    } else if (Math.abs(turnBank) > Cesium.Math.toRadians(0.5)) {
+      // Combat handling caps the effective airspeed so hard bank reversals
+      // stay responsive without allowing an unbounded turn rate.
       const airbrakeTurnBoost = braking ? 1.2 : 1;
       const turnAcceleration = Math.min(
-        Math.abs(this.bankTurnStrength * Math.tan(turnBank)) * airbrakeTurnBoost,
+        Math.abs(this.bankTurnStrength * Math.tan(turnBank)) * airbrakeTurnBoost * 4,
         this.maxTurnLoadFactor * 9.81
       );
+      const turnSpeed = Math.max(5, Math.min(s.speed, 90));
       const turnRate = Cesium.Math.clamp(
-        Math.sign(turnBank) * turnAcceleration / Math.max(s.speed, 5),
+        Math.sign(turnBank) * turnAcceleration / turnSpeed,
         -this.maxTurnRate * steeringSensitivity,
         this.maxTurnRate * steeringSensitivity
       );
@@ -623,15 +953,18 @@ class FlightController {
    * the flight-feel code above.
    */
   clampToTerrain(groundHeight) {
-    if (groundHeight === undefined) return; // terrain tile not loaded yet at this spot
+    if (groundHeight === undefined) return false; // terrain tile not loaded yet at this spot
     const s = this.state;
     const minHeight = groundHeight + MIN_TERRAIN_CLEARANCE;
     if (s.height < minHeight) {
+      const impact = s.verticalSpeed < 0;
       s.height = minHeight;
       if (s.verticalSpeed < 0) s.verticalSpeed = 0;
       if (s.pitch < 0) s.pitch = 0; // stop nosing further into the ground
       s.speed = Math.max(this.minSpeed, s.speed * 0.985); // slight speed scrub on contact
+      return impact;
     }
+    return false;
   }
 }
 
@@ -873,13 +1206,20 @@ class NetworkClient {
       case "welcome":
         this.id = msg.id;
         break;
-      case "roster":
-        this.players.clear();
+      case "roster": {
+        const present = new Set();
         for (const p of msg.players) {
-          if (p.id !== this.id) this.players.set(p.id, p);
+          if (p.id === this.id) continue;
+          present.add(p.id);
+          const current = this.players.get(p.id);
+          this.players.set(p.id, Object.assign(current || {}, p));
+        }
+        for (const id of this.players.keys()) {
+          if (!present.has(id)) this.players.delete(id);
         }
         this.onRoster(this.players);
         break;
+      }
       case "state": {
         if (msg.id === this.id) return;
         const existing = this.players.get(msg.id);
@@ -919,6 +1259,7 @@ class NetworkClient {
       spd: Math.round(state.speed),
       hp: health,
       alive,
+      bullets: ordnance.bullets,
       missiles: ordnance.missiles,
       flares: ordnance.flares,
     });
@@ -1011,6 +1352,7 @@ class RemoteFleet {
     const seen = new Set();
     for (const [ownerId, player] of this.network.players) {
       for (const [kind, items] of [
+        ["bullet", player.bullets || []],
         ["missile", player.missiles || []],
         ["flare", player.flares || []],
       ]) {
@@ -1020,11 +1362,22 @@ class RemoteFleet {
           seen.add(key);
           let record = this.ordnance.get(key);
           if (!record) {
+            const isBullet = kind === "bullet";
             const isMissile = kind === "missile";
             record = {
+              snapshot: null,
+              position: null,
+              receivedAt: 0,
               entity: this.world.viewer.entities.add({
                 position: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt),
-                ...(isMissile ? {
+                ...(isBullet ? {
+                  cylinder: {
+                    length: 1.4,
+                    topRadius: 0.045,
+                    bottomRadius: 0.07,
+                    material: Cesium.Color.fromCssColorString("#ffd68a"),
+                  },
+                } : isMissile ? {
                   cylinder: {
                     length: 4.5,
                     topRadius: 0,
@@ -1043,25 +1396,48 @@ class RemoteFleet {
                 }),
                 polyline: {
                   positions: [],
-                  width: isMissile ? 3 : 2,
-                  material: isMissile
-                    ? Cesium.Color.fromCssColorString("#ff6b35").withAlpha(0.75)
-                    : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
+                  width: isBullet ? 3 : isMissile ? 3 : 2,
+                  material: new Cesium.PolylineGlowMaterialProperty({
+                    color: isBullet
+                      ? Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.85)
+                      : isMissile
+                        ? Cesium.Color.fromCssColorString("#ff6b35").withAlpha(0.75)
+                        : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
+                    glowPower: isBullet ? 0.16 : 0.12,
+                  }),
+                  show: !isBullet || item.tracer === true,
                 },
               }),
             };
             this.ordnance.set(key, record);
           }
 
-          const position = Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt);
+          const isBullet = kind === "bullet";
+          if (isBullet && record.snapshot !== item) {
+            record.snapshot = item;
+            record.position = Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt);
+            record.receivedAt = performance.now();
+          }
+          const position = isBullet && item.vel
+            ? this._extrapolateBullet(record, item)
+            : Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt);
           record.entity.position = position;
-          const direction = item.dir
+          const direction = isBullet && item.vel
+            ? Cesium.Cartesian3.normalize(
+              Cesium.Cartesian3.fromElements(item.vel[0], item.vel[1], item.vel[2]),
+              new Cesium.Cartesian3()
+            )
+            : item.dir
             ? Cesium.Cartesian3.fromElements(item.dir[0], item.dir[1], item.dir[2])
             : Cesium.Cartesian3.UNIT_Z;
-          if (kind === "missile") record.entity.orientation = orientationAlongDirection(direction);
+          if (kind !== "flare") record.entity.orientation = orientationAlongDirection(direction);
           const trailStart = Cesium.Cartesian3.subtract(
             position,
-            Cesium.Cartesian3.multiplyByScalar(direction, kind === "missile" ? 9 : 5, new Cesium.Cartesian3()),
+            Cesium.Cartesian3.multiplyByScalar(
+              direction,
+              isBullet ? TRACER_LENGTH : kind === "missile" ? 9 : 5,
+              new Cesium.Cartesian3()
+            ),
             new Cesium.Cartesian3()
           );
           record.entity.polyline.positions = [trailStart, position];
@@ -1074,6 +1450,28 @@ class RemoteFleet {
       this.world.viewer.entities.remove(record.entity);
       this.ordnance.delete(key);
     }
+  }
+
+  _extrapolateBullet(record, item) {
+    const elapsed = Math.min((performance.now() - record.receivedAt) / 1000, 0.2);
+    const velocity = Cesium.Cartesian3.fromElements(item.vel[0], item.vel[1], item.vel[2]);
+    const displacement = Cesium.Cartesian3.multiplyByScalar(
+      velocity,
+      elapsed,
+      new Cesium.Cartesian3()
+    );
+    const position = Cesium.Cartesian3.add(record.position, displacement, new Cesium.Cartesian3());
+    const up = this.world.viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(
+      record.position,
+      new Cesium.Cartesian3()
+    );
+    const gravity = Cesium.Cartesian3.multiplyByScalar(up, -BULLET_GRAVITY, new Cesium.Cartesian3());
+    Cesium.Cartesian3.add(
+      position,
+      Cesium.Cartesian3.multiplyByScalar(gravity, 0.5 * elapsed * elapsed, new Cesium.Cartesian3()),
+      position
+    );
+    return position;
   }
 
   /** Every live remote aircraft as { id, position } — used for hit testing. */
@@ -1182,13 +1580,12 @@ class Guns {
     this.flareCooldown = 0;
     this.lockTargetId = null;
     this.lockProgress = 0;
+    this.lockBeepPlayed = false;
     this.missileRequested = false;
     this.flareRequested = false;
     this.weaponHudEl = document.getElementById("weaponHud");
     this.flightMenuEl = document.getElementById("settingsMenu");
-    this.lockStatusEl = document.getElementById("weaponLockStatus");
-    this.missileAmmoEl = document.getElementById("missileAmmo");
-    this.flareAmmoEl = document.getElementById("flareAmmo");
+    this.audioContext = null;
 
     window.addEventListener("pointerdown", (e) => {
       if (e.isPrimary && e.button === 0 &&
@@ -1209,6 +1606,8 @@ class Guns {
       if (document.hidden) this.cancelPendingActions();
     });
     window.addEventListener("keydown", (e) => {
+      this._unlockAudio();
+      if (!this.flightMenuEl.classList.contains("hidden")) return;
       if (e.code === "KeyF" && !e.repeat) this.missileRequested = true;
       if (e.code === "KeyC" && !e.repeat) this.flareRequested = true;
     });
@@ -1271,6 +1670,7 @@ class Guns {
     this.flareCooldown = 0;
     this.lockTargetId = null;
     this.lockProgress = 0;
+    this.lockBeepPlayed = false;
     this.cancelPendingActions();
   }
 
@@ -1286,7 +1686,19 @@ class Guns {
         dir: [direction.x, direction.y, direction.z],
       };
     });
+    const bulletSnapshots = this.bullets.map((bullet) => {
+      const position = Cesium.Cartographic.fromCartesian(bullet.position);
+      return {
+        id: bullet.id,
+        lon: Cesium.Math.toDegrees(position.longitude),
+        lat: Cesium.Math.toDegrees(position.latitude),
+        alt: position.height,
+        vel: [bullet.velocity.x, bullet.velocity.y, bullet.velocity.z],
+        tracer: bullet.tracer,
+      };
+    });
     return {
+      bullets: bulletSnapshots,
       missiles: snapshot(this.missiles),
       flares: snapshot(this.flares),
     };
@@ -1321,6 +1733,7 @@ class Guns {
     if (!alive || !this.fleet) {
       this.lockTargetId = null;
       this.lockProgress = 0;
+      this.lockBeepPlayed = false;
       return;
     }
 
@@ -1348,11 +1761,53 @@ class Guns {
     if (!bestTarget) {
       this.lockTargetId = null;
       this.lockProgress = 0;
+      this.lockBeepPlayed = false;
     } else if (bestTarget.id === this.lockTargetId) {
       this.lockProgress = Math.min(MISSILE_LOCK_TIME, this.lockProgress + dt);
+      if (this.lockProgress >= MISSILE_LOCK_TIME && !this.lockBeepPlayed) {
+        this.lockBeepPlayed = true;
+        this._playLockBeep();
+      }
     } else {
       this.lockTargetId = bestTarget.id;
       this.lockProgress = 0;
+      this.lockBeepPlayed = false;
+    }
+  }
+
+  _unlockAudio() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!this.audioContext) this.audioContext = new AudioContextClass();
+    if (this.audioContext.state === "suspended") {
+      this.audioContext.resume().catch((error) => {
+        console.warn("Missile lock audio could not be enabled.", error);
+      });
+    }
+  }
+
+  _playLockBeep() {
+    this._unlockAudio();
+    if (!this.audioContext) return;
+    const play = () => {
+      const now = this.audioContext.currentTime;
+      const oscillator = this.audioContext.createOscillator();
+      const gain = this.audioContext.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.12, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      oscillator.connect(gain);
+      gain.connect(this.audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.17);
+    };
+    if (this.audioContext.state === "running") play();
+    else {
+      this.audioContext.resume().then(play).catch((error) => {
+        console.warn("Missile lock beep could not be played.", error);
+      });
     }
   }
 
@@ -1405,6 +1860,7 @@ class Guns {
     this.missilesRemaining--;
     this.lockTargetId = null;
     this.lockProgress = 0;
+    this.lockBeepPlayed = false;
   }
 
   _releaseFlare(state) {
@@ -1596,27 +2052,13 @@ class Guns {
   }
 
   _updateWeaponHud(alive) {
-    if (!this.lockStatusEl) return;
-    let status = "NO TARGET · AIM AT A PILOT";
-    let locked = false;
-    if (!alive) {
-      status = "AIRCRAFT DISABLED";
-    } else if (this.lockTargetId) {
-      const targetName = this.lockTargetId.slice(0, 6).toUpperCase();
-      if (this.lockProgress >= MISSILE_LOCK_TIME) {
-        status = this.missilesRemaining > 0
-          ? `LOCKED ${targetName} · PRESS F`
-          : "NO MISSILES · PRESS C FOR FLARES";
-        locked = this.missilesRemaining > 0;
-      } else {
-        const progress = Math.floor((this.lockProgress / MISSILE_LOCK_TIME) * 100);
-        status = `TRACKING ${targetName} · ${progress}%`;
-      }
+    const tracking = alive && Boolean(this.lockTargetId) && this.lockProgress > 0;
+    const locked = tracking && this.lockProgress >= MISSILE_LOCK_TIME;
+    const crosshair = document.getElementById("crosshair");
+    if (crosshair) {
+      crosshair.classList.toggle("missile-tracking", tracking && !locked);
+      crosshair.classList.toggle("missile-locked", locked);
     }
-    this.lockStatusEl.textContent = status;
-    this.lockStatusEl.classList.toggle("locked", locked);
-    this.missileAmmoEl.textContent = `${this.missilesRemaining}`;
-    this.flareAmmoEl.textContent = `${this.flaresRemaining}`;
     const heatFill = document.getElementById("gunHeatFill");
     const gunStatus = document.getElementById("gunHeatStatus");
     if (heatFill) {
@@ -1638,6 +2080,8 @@ class Guns {
 
   hideHud() {
     document.getElementById("weaponHud").classList.add("hidden");
+    const crosshair = document.getElementById("crosshair");
+    if (crosshair) crosshair.classList.remove("missile-tracking", "missile-locked");
   }
 
   _fire(state) {
@@ -1657,12 +2101,14 @@ class Guns {
       new Cesium.Cartesian3()
     );
 
+    const tracer = this.rounds % TRACER_INTERVAL === 0;
     const bullet = {
+      id: `${Date.now().toString(36)}-${this.rounds}`,
       position: Cesium.Cartesian3.clone(muzzle),
       velocity,
       distance: 0,
       life: BULLET_LIFETIME,
-      tracer: this.rounds % TRACER_INTERVAL === 0,
+      tracer,
       entity: this.world.viewer.entities.add({
         position: muzzle,
         orientation: orientationAlongDirection(velocity),
@@ -1670,7 +2116,7 @@ class Guns {
           length: 1.4,
           topRadius: 0.045,
           bottomRadius: 0.07,
-          material: this.rounds % TRACER_INTERVAL === 0
+          material: tracer
             ? Cesium.Color.fromCssColorString("#ffd68a")
             : Cesium.Color.fromCssColorString("#b8c2c8"),
           outline: true,
@@ -1683,7 +2129,7 @@ class Guns {
             color: Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.75),
             glowPower: 0.12,
           }),
-          show: this.rounds % TRACER_INTERVAL === 0,
+          show: tracer,
         },
       }),
     };
@@ -1785,146 +2231,132 @@ class Guns {
     this.flares = [];
     this.lockTargetId = null;
     this.lockProgress = 0;
+    this.lockBeepPlayed = false;
     this.cancelPendingActions();
   }
 }
 
 // ---------------------------------------------------------------------------
-// MiniMap — canvas globe in the top-left corner
+// MiniMap — a small Cesium globe with FFA radar markers
 // ---------------------------------------------------------------------------
-// An orthographic projection centred on the player: the hemisphere you're on
-// is drawn, and anyone over the horizon is hidden rather than drawn flat.
 
 class MiniMap {
   constructor() {
-    this.canvas = document.getElementById("miniMap");
-    this.ctx = this.canvas ? this.canvas.getContext("2d") : null;
     this.labelEl = document.getElementById("miniMapLabel");
-    this.size = this.canvas ? this.canvas.width : 0;
-    this.radius = this.size / 2 - 6;
-    this.zoom = 6;
-    this.tileSize = 256;
-    this.tileCache = new Map();
+    this.enemyCountEl = document.getElementById("miniMapEnemyCount");
+    this.enemies = new Map();
+    this.lastUpdate = 0;
+    this.viewer = new Cesium.Viewer("miniMapGlobe", {
+      baseLayer: new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({
+        url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        credit: "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      })),
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+      animation: false,
+      timeline: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      fullscreenButton: false,
+      selectionIndicator: false,
+      infoBox: false,
+      scene3DOnly: true,
+      requestRenderMode: true,
+      maximumRenderTimeChange: Number.POSITIVE_INFINITY,
+    });
+    this.viewer.resolutionScale = 0.75;
+    this.viewer.scene.globe.enableLighting = true;
+    this.viewer.scene.globe.maximumScreenSpaceError = 2;
+    this.viewer.scene.skyAtmosphere.show = true;
+    this.viewer.scene.screenSpaceCameraController.enableInputs = false;
+    this.viewer.camera.frustum.fov = Cesium.Math.toRadians(48);
+    this.ownMarker = this.viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
+      point: {
+        pixelSize: 11,
+        color: Cesium.Color.fromCssColorString("#6ff2ff"),
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2,
+        heightReference: Cesium.HeightReference.NONE,
+      },
+    });
   }
 
   show() {
-    const wrap = document.getElementById("miniMapWrap");
-    if (wrap) wrap.classList.remove("hidden");
+    document.getElementById("miniMapWrap").classList.remove("hidden");
+    this.viewer.resize();
+    this.viewer.scene.requestRender();
   }
 
   hide() {
-    const wrap = document.getElementById("miniMapWrap");
-    if (wrap) wrap.classList.add("hidden");
+    document.getElementById("miniMapWrap").classList.add("hidden");
   }
 
-  _worldPixel(longitude, latitude) {
-    const worldSize = (2 ** this.zoom) * this.tileSize;
-    const boundedLatitude = Cesium.Math.clamp(latitude, -85.05112878, 85.05112878);
-    const latitudeRadians = Cesium.Math.toRadians(boundedLatitude);
-    return {
-      x: ((longitude + 180) / 360) * worldSize,
-      y: (0.5 - Math.log(
-        (1 + Math.sin(latitudeRadians)) / (1 - Math.sin(latitudeRadians))
-      ) / (4 * Math.PI)) * worldSize,
-    };
-  }
+  update(state, players) {
+    const now = performance.now();
+    if (now - this.lastUpdate < 100) return;
+    this.lastUpdate = now;
 
-  _project(longitude, latitude, center) {
-    const point = this._worldPixel(longitude, latitude);
-    const worldSize = this.tileSize * (2 ** this.zoom);
-    let deltaX = point.x - center.x;
-    if (deltaX > worldSize / 2) deltaX -= worldSize;
-    if (deltaX < -worldSize / 2) deltaX += worldSize;
-    const x = this.size / 2 + deltaX;
-    const y = this.size / 2 + point.y - center.y;
-    if (Math.hypot(x - this.size / 2, y - this.size / 2) > this.radius) return null;
-    return { x, y };
-  }
+    const surface = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, 0);
+    const up = this.viewer.scene.globe.ellipsoid.geodeticSurfaceNormal(
+      surface,
+      new Cesium.Cartesian3()
+    );
+    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(surface);
+    const north = Cesium.Matrix4.multiplyByPointAsVector(
+      enu,
+      Cesium.Cartesian3.UNIT_Y,
+      new Cesium.Cartesian3()
+    );
+    const cameraPosition = Cesium.Cartesian3.add(
+      surface,
+      Cesium.Cartesian3.multiplyByScalar(up, 12000000, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    const direction = Cesium.Cartesian3.negate(up, new Cesium.Cartesian3());
+    this.viewer.camera.setView({
+      destination: cameraPosition,
+      orientation: { direction, up: north },
+    });
 
-  _getTile(x, y) {
-    const tileCount = 2 ** this.zoom;
-    if (y < 0 || y >= tileCount) return null;
-    const wrappedX = ((x % tileCount) + tileCount) % tileCount;
-    const key = `${this.zoom}/${wrappedX}/${y}`;
-    if (this.tileCache.has(key)) return this.tileCache.get(key);
+    this.ownMarker.position = Cesium.Cartesian3.fromDegrees(
+      state.longitude,
+      state.latitude,
+      Math.max(0, state.height)
+    );
 
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => {
-      while (this.tileCache.size > 128) {
-        const oldestKey = this.tileCache.keys().next().value;
-        if (oldestKey === undefined) break;
-        this.tileCache.delete(oldestKey);
+    const seen = new Set();
+    for (const [id, player] of players) {
+      if (!Number.isFinite(player.lon) || !Number.isFinite(player.lat) ||
+          player.alive === false) continue;
+      seen.add(id);
+      let marker = this.enemies.get(id);
+      if (!marker) {
+        marker = this.viewer.entities.add({
+          point: {
+            pixelSize: 9,
+            color: Cesium.Color.fromCssColorString("#ff4b57"),
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.9),
+            outlineWidth: 1.5,
+            heightReference: Cesium.HeightReference.NONE,
+          },
+        });
+        this.enemies.set(id, marker);
       }
-    };
-    image.onerror = () => console.warn(`Map tile failed to load: ${key}`);
-    this.tileCache.set(key, image);
-    image.src = `https://tile.openstreetmap.org/${key}.png`;
-    return image;
-  }
-
-  draw(state, players) {
-    if (!this.ctx) return;
-    const ctx = this.ctx;
-    const c = this.size / 2;
-    ctx.clearRect(0, 0, this.size, this.size);
-    const center = this._worldPixel(state.longitude, state.latitude);
-
-    // Clip the local world map to a globe-like disc centered on the aircraft.
-    ctx.beginPath();
-    ctx.arc(c, c, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = "#10253a";
-    ctx.fill();
-    ctx.save();
-    ctx.clip();
-    const firstTileX = Math.floor((center.x - this.radius) / this.tileSize);
-    const lastTileX = Math.floor((center.x + this.radius) / this.tileSize);
-    const firstTileY = Math.floor((center.y - this.radius) / this.tileSize);
-    const lastTileY = Math.floor((center.y + this.radius) / this.tileSize);
-    for (let tileY = firstTileY; tileY <= lastTileY; tileY++) {
-      for (let tileX = firstTileX; tileX <= lastTileX; tileX++) {
-        const image = this._getTile(tileX, tileY);
-        if (!image || !image.complete || image.naturalWidth === 0) continue;
-        ctx.drawImage(
-          image,
-          tileX * this.tileSize - center.x + c,
-          tileY * this.tileSize - center.y + c,
-          this.tileSize,
-          this.tileSize
-        );
-      }
-    }
-    ctx.restore();
-
-    // Other players
-    for (const [, p] of players) {
-      if (p.lon === undefined || p.alive === false) continue;
-      const pt = this._project(p.lon, p.lat, center);
-      if (!pt) continue;
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = "#ff3b30";
-      ctx.fill();
+      marker.position = Cesium.Cartesian3.fromDegrees(
+        player.lon,
+        player.lat,
+        Math.max(0, player.alt || 0)
+      );
     }
 
-    ctx.beginPath();
-    ctx.arc(c, c, this.radius, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(90, 220, 255, 0.75)";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.save();
-    ctx.translate(c, c);
-    ctx.rotate(state.heading);
-    ctx.beginPath();
-    ctx.moveTo(0, -7);
-    ctx.lineTo(4.5, 5);
-    ctx.lineTo(0, 2.5);
-    ctx.lineTo(-4.5, 5);
-    ctx.closePath();
-    ctx.fillStyle = "#6ff2ff";
-    ctx.fill();
-    ctx.restore();
+    for (const [id, marker] of this.enemies) {
+      if (seen.has(id)) continue;
+      this.viewer.entities.remove(marker);
+      this.enemies.delete(id);
+    }
 
     if (this.labelEl) {
       const latDirection = state.latitude < 0 ? "S" : "N";
@@ -1932,8 +2364,11 @@ class MiniMap {
       this.labelEl.textContent =
         `${Math.abs(state.latitude).toFixed(3)}°${latDirection} ${Math.abs(state.longitude).toFixed(3)}°${lonDirection}`;
     }
+    if (this.enemyCountEl) {
+      this.enemyCountEl.textContent = `ENEMIES ${this.enemies.size}`;
+    }
+    this.viewer.scene.requestRender();
   }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,17 +2440,13 @@ class HUD {
 }
 
 class FlightSettingsMenu {
-  constructor(settings, onPause, canOpen, onFieldOfViewChange, onLeave) {
+  constructor(settings, onMenuStateChange, canOpen, onFieldOfViewChange, onLeave) {
     this.settings = settings;
-    this.onPause = onPause;
+    this.onMenuStateChange = onMenuStateChange;
     this.canOpen = canOpen;
     this.onFieldOfViewChange = onFieldOfViewChange;
     this.onLeave = onLeave;
     this.el = document.getElementById("settingsMenu");
-    this.pauseTabButton = document.getElementById("pauseTabButton");
-    this.settingsTabButton = document.getElementById("settingsTabButton");
-    this.pausePanel = document.getElementById("pauseMenuPanel");
-    this.settingsPanel = document.getElementById("flightSettingsPanel");
     this.steeringInput = document.getElementById("steeringSensitivity");
     this.cameraInput = document.getElementById("cameraSensitivity");
     this.fieldOfViewInput = document.getElementById("fieldOfView");
@@ -2028,8 +2459,6 @@ class FlightSettingsMenu {
     this.cameraInput.value = settings.cameraSensitivity;
     this.fieldOfViewInput.value = settings.fieldOfView;
     this._updateLabels();
-    this.pauseTabButton.addEventListener("click", () => this.showTab("pause"));
-    this.settingsTabButton.addEventListener("click", () => this.showTab("settings"));
 
     this.steeringInput.addEventListener("input", () => {
       settings.steeringSensitivity = Number(this.steeringInput.value);
@@ -2068,24 +2497,15 @@ class FlightSettingsMenu {
 
   open() {
     this.isOpen = true;
-    this.showTab("pause");
     this.el.classList.remove("hidden");
-    this.onPause();
-    this.pauseTabButton.focus();
-  }
-
-  showTab(tab) {
-    const showSettings = tab === "settings";
-    this.pauseTabButton.setAttribute("aria-selected", String(!showSettings));
-    this.settingsTabButton.setAttribute("aria-selected", String(showSettings));
-    this.pausePanel.classList.toggle("hidden", showSettings);
-    this.settingsPanel.classList.toggle("hidden", !showSettings);
+    this.onMenuStateChange();
+    this.steeringInput.focus();
   }
 
   close() {
     this.isOpen = false;
     this.el.classList.add("hidden");
-    this.onPause();
+    this.onMenuStateChange();
   }
 }
 
@@ -2177,6 +2597,8 @@ class StartScreenUI {
 async function main() {
   new FullscreenToggle();
   const world = new CesiumWorld("cesiumContainer");
+  const damageSmoke = new DamageSmoke(world);
+  const explosion = new AircraftExplosion(world);
   const hud = new HUD();
   const settings = new FlightSettings();
   const chaseCamera = new ChaseCamera(world, settings);
@@ -2192,7 +2614,10 @@ async function main() {
   let flying = false;
   let health = MAX_HEALTH;
   let alive = true;
-  let respawnTimer = 0;
+  let deathTimer = 0;
+  const deathScreenEl = document.getElementById("deathScreen");
+  const deathReasonEl = document.getElementById("deathReason");
+  const deathCountdownEl = document.getElementById("deathCountdown");
   const settingsMenu = new FlightSettingsMenu(
     settings,
     () => {
@@ -2212,7 +2637,7 @@ async function main() {
     if (!alive) return;
     health -= msg.damage ?? BULLET_DAMAGE;
     hud.banner("HIT", 600);
-    if (health <= 0) killPlayer();
+    if (health <= 0) beginDeathSequence("SHOT DOWN");
   };
   network.connect();
 
@@ -2224,23 +2649,28 @@ async function main() {
     if (e.code === "BracketLeft" || e.code === "BracketRight") hud.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
   });
 
-  function killPlayer() {
+  function beginDeathSequence(reason) {
+    if (!flying || !alive || !flightController) return;
     alive = false;
     health = 0;
-    respawnTimer = RESPAWN_DELAY;
-    if (aircraft) aircraft.entity.model.show = false;
+    deathTimer = DEATH_SCREEN_DURATION;
+    flightController.keys.clear();
+    guns.cancelPendingActions();
     guns.clear();
-    hud.banner("DESTROYED", 0);
-  }
-
-  function respawn() {
-    alive = true;
-    health = MAX_HEALTH;
-    if (aircraft) aircraft.entity.model.show = true;
-    flightController.reset();
-    guns.resetLoadout();
-    chaseCamera.reset();
-    hud.clearBanner();
+    damageSmoke.clear();
+    explosion.start(flightController.state);
+    if (aircraft) aircraft.entity.model.show = false;
+    network.sendState(
+      flightController.state,
+      health,
+      false,
+      guns.getNetworkOrdnance(),
+      true
+    );
+    hud.updateCombat(health, network.players.size + 1);
+    deathReasonEl.textContent = reason;
+    deathCountdownEl.textContent = `${Math.ceil(deathTimer)}`;
+    deathScreenEl.classList.remove("hidden");
   }
 
   const startScreenUI = new StartScreenUI(async () => {
@@ -2253,6 +2683,9 @@ async function main() {
   function leaveFlight() {
     if (!flying) return;
     guns.clear();
+    damageSmoke.clear();
+    explosion.clear();
+    deathScreenEl.classList.add("hidden");
     if (flightController) {
       network.sendState(
         flightController.state,
@@ -2286,6 +2719,9 @@ async function main() {
   async function beginFlight(longitude, latitude) {
     startScreenUI.hide();
     spawnSelector.clearMarker();
+    damageSmoke.clear();
+    explosion.clear();
+    deathScreenEl.classList.add("hidden");
 
     const terrainHeight = await world.sampleTerrainHeight(longitude, latitude);
     const spawnState = new PlayerState({
@@ -2330,7 +2766,15 @@ async function main() {
     lastFrameTime = now;
 
     if (!flying || !flightController || !aircraft) return;
-    if (settingsMenu.isOpen) return;
+
+    if (!alive) {
+      flightController.keys.clear();
+      explosion.update(dt);
+      deathTimer = Math.max(0, deathTimer - dt);
+      deathCountdownEl.textContent = `${Math.ceil(deathTimer)}`;
+      if (deathTimer <= 0) leaveFlight();
+      return;
+    }
 
     flightController.update(dt);
 
@@ -2343,16 +2787,19 @@ async function main() {
       flightController.state.longitude,
       flightController.state.latitude
     );
-    flightController.clampToTerrain(groundHeight);
+    const groundImpact = flightController.clampToTerrain(groundHeight);
 
     const state = flightController.state;
-
-    if (!alive) {
-      respawnTimer -= dt;
-      if (respawnTimer <= 0) respawn();
+    if (groundImpact) {
+      aircraft.render(state);
+      chaseCamera.follow(state, dt);
+      beginDeathSequence("GROUND IMPACT");
+      explosion.update(dt);
+      return;
     }
 
     aircraft.render(state);
+    damageSmoke.update(dt, state, alive && health <= LOW_HEALTH_SMOKE_THRESHOLD);
     chaseCamera.follow(state, dt);
     hud.update(state);
 
@@ -2360,7 +2807,7 @@ async function main() {
     guns.update(dt, state, alive);
     network.sendState(state, health, alive, guns.getNetworkOrdnance());
     hud.updateCombat(health, network.players.size + 1);
-    miniMap.draw(state, network.players);
+    miniMap.update(state, network.players);
   });
 }
 

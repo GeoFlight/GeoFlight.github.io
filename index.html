@@ -54,9 +54,10 @@
 
   <!-- ===================== MINI MAP ===================== -->
   <div id="miniMapWrap" class="hidden">
-    <canvas id="miniMap" width="170" height="170"></canvas>
+    <div id="miniMapGlobe" aria-label="Three-dimensional globe and free-for-all radar"></div>
     <div id="miniMapLabel" class="minimap-label">0.0° 0.0°</div>
-    <div class="minimap-attribution">© OpenStreetMap contributors</div>
+    <div id="miniMapEnemyCount" class="minimap-enemy-count">ENEMIES 0</div>
+    <div class="minimap-attribution">IMAGERY © ESRI</div>
   </div>
 
   <!-- ===================== FLIGHT HUD ===================== -->
@@ -74,7 +75,7 @@
     <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
     <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
 
-    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake &nbsp; R · Reset<br />Click · Guns &nbsp; F · Missile &nbsp; C · Flare<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Menu</div>
+    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Q · Quick 180° &nbsp; R · Reset<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake<br />Click · Guns &nbsp; F · Missile &nbsp; C · Flare<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Settings</div>
   </div>
 
   <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
@@ -83,27 +84,15 @@
     <span class="cross-h"></span><span class="cross-v"></span>
   </div>
   <div id="weaponHud" class="weapon-hud hidden" aria-live="polite">
-    <div id="weaponLockStatus" class="weapon-lock-status">NO TARGET</div>
-    <div class="weapon-ammo">
-      <span>MSL <strong id="missileAmmo">4</strong></span>
-      <span>FLR <strong id="flareAmmo">8</strong></span>
-    </div>
     <div id="gunHeatStatus" class="gun-heat-status">GUN HEAT 0%</div>
     <div class="gun-heat-track"><div id="gunHeatFill" class="gun-heat-fill"></div></div>
   </div>
 
   <section id="settingsMenu" class="settings-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="settings-panel">
-      <p class="settings-eyebrow">FLIGHT MENU</p>
-      <h2 id="settingsTitle">PAUSED</h2>
-      <div class="settings-tabs" role="tablist" aria-label="Flight menu">
-        <button id="pauseTabButton" class="settings-tab" type="button" role="tab" aria-selected="true" aria-controls="pauseMenuPanel">PAUSE</button>
-        <button id="settingsTabButton" class="settings-tab" type="button" role="tab" aria-selected="false" aria-controls="flightSettingsPanel">SETTINGS</button>
-      </div>
-      <div id="pauseMenuPanel" role="tabpanel" aria-labelledby="pauseTabButton">
-        <p class="settings-hint">Your flight is paused.</p>
-      </div>
-      <div id="flightSettingsPanel" class="hidden" role="tabpanel" aria-labelledby="settingsTabButton">
+      <p class="settings-eyebrow">ONLINE FLIGHT</p>
+      <h2 id="settingsTitle">SETTINGS</h2>
+      <div id="flightSettingsPanel">
         <label class="setting-control" for="steeringSensitivity">
           <span>Steering sensitivity <output id="steeringSensitivityValue"></output></span>
           <input id="steeringSensitivity" type="range" min="0.3" max="1.5" step="0.05" />
@@ -116,16 +105,25 @@
           <span>Field of view <output id="fieldOfViewValue"></output></span>
           <input id="fieldOfView" type="range" min="50" max="100" step="1" />
         </label>
-        <p class="settings-hint">Right-drag to look around · Mouse wheel to zoom</p>
+        <p class="settings-hint">Flight continues while settings are open. Right-drag to look around · Mouse wheel to zoom</p>
       </div>
       <div class="menu-actions">
-        <button id="resumeFlightBtn" class="start-button" type="button">RESUME FLIGHT</button>
+        <button id="resumeFlightBtn" class="start-button" type="button">CLOSE SETTINGS</button>
         <button id="leaveFlightBtn" class="leave-button" type="button">LEAVE FLIGHT</button>
       </div>
-      <p class="settings-escape-hint">Press ESC to resume</p>
+      <p class="settings-escape-hint">Press ESC to close settings · Flight is not paused</p>
     </div>
   </section>
 
-  <script src="game.js?v=20261118-click-fire-render-multiplayer-v2"></script>
+  <section id="deathScreen" class="death-screen hidden" role="alertdialog" aria-modal="true" aria-labelledby="deathTitle">
+    <div class="death-panel">
+      <p class="death-eyebrow">FLIGHT TERMINATED</p>
+      <h1 id="deathTitle">AIRCRAFT DESTROYED</h1>
+      <p id="deathReason">GROUND IMPACT</p>
+      <p class="death-return">RETURNING TO SPAWN SELECT IN <span id="deathCountdown">3</span></p>
+    </div>
+  </section>
+
+  <script src="game.js?v=20261119-crash-turn-v2"></script>
 </body>
 </html>
