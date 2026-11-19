@@ -40,9 +40,9 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const COCKPIT_MODEL_URL = "assets/cockpit.glb";
-const COCKPIT_EYE_FORWARD_OFFSET = 2.2;
-const COCKPIT_EYE_HEIGHT_OFFSET = 1.65;
-const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
+const COCKPIT_EYE_FORWARD_OFFSET = 1.4;
+const COCKPIT_EYE_HEIGHT_OFFSET = 2.35;
+const SPAWN_HEIGHT_ABOVE_TERRAIN = 800; // meters — leaves room for aerobatic maneuvers
 // The model file itself has been re-baked to real-world metres (19.43 m long)
 // with its nose on the +Z axis Cesium expects, so no scaling or axis fudging
 // is needed here any more.
@@ -94,8 +94,9 @@ const TRACER_INTERVAL = 2;             // denser tracer stream so rounds stay vi
 const TRACER_LENGTH = 90;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
 const HIT_RADIUS = 14;                 // meters — approximate aircraft hit radius
-const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(6);
-const GUN_AIM_ASSIST_DISTANCE = 3000;
+const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(1.5);
+const GUN_AIM_ASSIST_DISTANCE = 1800;
+const GUN_AIM_ASSIST_MAX_STRENGTH = 0.1;
 const MISSILE_DAMAGE = 40;
 const MISSILE_LOCK_TIME = 3;
 const MISSILE_LOCK_CONE = Cesium.Math.toRadians(24);
@@ -132,40 +133,27 @@ function orientationAlongDirection(direction) {
   return Cesium.Quaternion.fromAxisAngle(axis, Math.acos(dot));
 }
 
-function createBulletFireballImage() {
+function createBulletTracerImage() {
   const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 48;
+  canvas.width = 96;
+  canvas.height = 24;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Could not create the bullet fireball texture.");
+  if (!context) throw new Error("Could not create the bullet tracer texture.");
 
-  const glow = context.createRadialGradient(76, 24, 2, 70, 24, 54);
-  glow.addColorStop(0, "rgba(255,255,235,1)");
-  glow.addColorStop(0.18, "rgba(255,226,105,0.98)");
-  glow.addColorStop(0.48, "rgba(255,116,24,0.8)");
-  glow.addColorStop(0.78, "rgba(235,48,8,0.42)");
+  const glow = context.createLinearGradient(0, 12, 96, 12);
+  glow.addColorStop(0, "rgba(255,90,12,0)");
+  glow.addColorStop(0.2, "rgba(255,125,24,0.25)");
+  glow.addColorStop(0.62, "rgba(255,183,58,0.62)");
+  glow.addColorStop(0.9, "rgba(255,236,160,0.95)");
   glow.addColorStop(1, "rgba(180,20,0,0)");
   context.fillStyle = glow;
-  context.beginPath();
-  context.ellipse(70, 24, 61, 20, 0, 0, Math.PI * 2);
-  context.fill();
-
-  const core = context.createLinearGradient(36, 24, 114, 24);
-  core.addColorStop(0, "rgba(255,114,15,0)");
-  core.addColorStop(0.35, "rgba(255,190,42,0.9)");
-  core.addColorStop(0.78, "rgba(255,255,220,1)");
-  core.addColorStop(1, "rgba(255,255,255,0.85)");
-  context.fillStyle = core;
-  context.beginPath();
-  context.ellipse(78, 24, 43, 7, 0, 0, Math.PI * 2);
-  context.fill();
-
-  for (let i = 0; i < 28; i++) {
-    const x = Math.random() * 112;
-    const y = 8 + Math.random() * 32;
-    context.fillStyle = i % 3 === 0 ? "rgba(255,255,210,0.9)" : "rgba(255,156,35,0.8)";
-    context.fillRect(x, y, 2 + Math.random() * 3, 1 + Math.random() * 2);
-  }
+  context.fillRect(0, 5, canvas.width, 14);
+  context.fillStyle = "rgba(255,156,45,0.82)";
+  context.fillRect(18, 9, 64, 6);
+  context.fillStyle = "rgba(255,244,198,1)";
+  context.fillRect(65, 10, 25, 4);
+  context.fillStyle = "rgba(255,255,255,1)";
+  context.fillRect(84, 10, 10, 4);
   return canvas.toDataURL("image/png");
 }
 
@@ -1052,6 +1040,7 @@ class ChaseCamera {
   constructor(world, settings) {
     this.world = world;
     this.settings = settings;
+    this.canvas = world.viewer.scene.canvas;
     this.behindDistance = 72;
     this.cameraYaw = 0;
     this.cameraPitch = 0;
@@ -1066,6 +1055,12 @@ class ChaseCamera {
     this.travelDirection = null; // world-space unit vector aligned with the aircraft nose
     this.applyFieldOfView();
 
+    this.canvas.addEventListener("click", () => {
+      if (
+        this.enabled &&
+        document.getElementById("settingsMenu").classList.contains("hidden")
+      ) this.lockPointer();
+    });
     window.addEventListener("mousemove", (event) => {
       if (
         !this.enabled ||
@@ -1108,6 +1103,25 @@ class ChaseCamera {
     this.lookPitch = 0;
   }
 
+  lockPointer() {
+    if (
+      typeof this.canvas.requestPointerLock !== "function" ||
+      document.pointerLockElement === this.canvas
+    ) return;
+    try {
+      const request = this.canvas.requestPointerLock();
+      if (request && typeof request.catch === "function") {
+        request.catch((error) => console.warn("Could not lock the flight cursor.", error));
+      }
+    } catch (error) {
+      console.warn("Could not lock the flight cursor.", error);
+    }
+  }
+
+  unlockPointer() {
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+  }
+
   applyFieldOfView() {
     this.world.viewer.camera.frustum.fov = Cesium.Math.toRadians(this.settings.fieldOfView);
   }
@@ -1135,18 +1149,22 @@ class ChaseCamera {
     Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
 
     if (this.firstPerson) {
+      // Derive the cockpit up axis from pitch directly; projecting world up
+      // loses its direction when the aircraft points straight up in a loop.
+      const horizontalForward = Cesium.Matrix4.multiplyByPointAsVector(
+        enu,
+        new Cesium.Cartesian3(Math.sin(state.heading), Math.cos(state.heading), 0),
+        new Cesium.Cartesian3()
+      );
       const aircraftUp = Cesium.Cartesian3.subtract(
-        up,
+        Cesium.Cartesian3.multiplyByScalar(up, Math.cos(state.pitch), new Cesium.Cartesian3()),
         Cesium.Cartesian3.multiplyByScalar(
-          this.travelDirection,
-          Cesium.Cartesian3.dot(up, this.travelDirection),
+          horizontalForward,
+          Math.sin(state.pitch),
           new Cesium.Cartesian3()
         ),
         new Cesium.Cartesian3()
       );
-      if (Cesium.Cartesian3.magnitudeSquared(aircraftUp) < 1e-6) {
-        Cesium.Cartesian3.clone(up, aircraftUp);
-      }
       Cesium.Cartesian3.normalize(aircraftUp, aircraftUp);
       const rollRotation = Cesium.Quaternion.fromAxisAngle(
         this.travelDirection,
@@ -1544,8 +1562,8 @@ class RemoteFleet {
                 ...(isBullet ? {
                   billboard: {
                     image: this.bulletImage,
-                    width: 64,
-                    height: 24,
+                    width: 38,
+                    height: 10,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
                     scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
                   },
@@ -1568,14 +1586,14 @@ class RemoteFleet {
                 }),
                 polyline: {
                   positions: [],
-                  width: isBullet ? 6 : isMissile ? 3 : 2,
+                  width: isBullet ? 3 : isMissile ? 3 : 2,
                   material: new Cesium.PolylineGlowMaterialProperty({
                     color: isBullet
-                      ? Cesium.Color.fromCssColorString("#ffb53d").withAlpha(1)
+                      ? Cesium.Color.fromCssColorString("#ffd98a").withAlpha(0.9)
                       : isMissile
                         ? Cesium.Color.fromCssColorString("#ff6b35").withAlpha(0.75)
                         : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
-                    glowPower: isBullet ? 0.45 : 0.12,
+                    glowPower: isBullet ? 0.22 : 0.12,
                   }),
                   show: true,
                 },
@@ -2279,17 +2297,17 @@ class Guns {
         position: muzzle,
         billboard: {
           image: this.bulletImage,
-          width: 64,
-          height: 24,
+          width: 38,
+          height: 10,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
         },
         polyline: {
           positions: [muzzle, muzzle],
-          width: 6,
+          width: 3,
           material: new Cesium.PolylineGlowMaterialProperty({
-            color: Cesium.Color.fromCssColorString("#ffb53d").withAlpha(1),
-            glowPower: 0.45,
+            color: Cesium.Color.fromCssColorString("#ffd98a").withAlpha(0.9),
+            glowPower: 0.22,
           }),
           show: true,
         },
@@ -2333,7 +2351,12 @@ class Guns {
       1
     );
     const assisted = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.lerp(direction, toTarget, 0.18 + coneProgress * 0.32, new Cesium.Cartesian3()),
+      Cesium.Cartesian3.lerp(
+        direction,
+        toTarget,
+        coneProgress * GUN_AIM_ASSIST_MAX_STRENGTH,
+        new Cesium.Cartesian3()
+      ),
       new Cesium.Cartesian3()
     );
     return assisted;
@@ -2700,7 +2723,7 @@ class FlightSettingsMenu {
     });
     document.getElementById("resumeFlightBtn").addEventListener("click", () => this.close());
     document.getElementById("leaveFlightBtn").addEventListener("click", () => {
-      this.close();
+      this.close(false);
       this.onLeave();
     });
     window.addEventListener("keydown", (event) => {
@@ -2724,10 +2747,10 @@ class FlightSettingsMenu {
     this.steeringInput.focus();
   }
 
-  close() {
+  close(relockPointer = true) {
     this.isOpen = false;
     this.el.classList.add("hidden");
-    this.onMenuStateChange();
+    this.onMenuStateChange(relockPointer);
   }
 }
 
@@ -2828,7 +2851,7 @@ async function main() {
 
   const network = new NetworkClient(MULTIPLAYER_URL);
   const globeMarkers = new GlobeMarkers(world);
-  const bulletImage = createBulletFireballImage();
+  const bulletImage = createBulletTracerImage();
   const fleet = new RemoteFleet(world, network, bulletImage);
   const guns = new Guns(world, network, fleet, bulletImage);
 
@@ -2843,9 +2866,11 @@ async function main() {
   const deathCountdownEl = document.getElementById("deathCountdown");
   const settingsMenu = new FlightSettingsMenu(
     settings,
-    () => {
+    (relockPointer = true) => {
       if (flightController) flightController.keys.clear();
       guns.cancelPendingActions();
+      if (settingsMenu.isOpen) chaseCamera.unlockPointer();
+      else if (relockPointer && flying) chaseCamera.lockPointer();
     },
     () => flying,
     () => chaseCamera.applyFieldOfView(),
@@ -2888,6 +2913,7 @@ async function main() {
   function beginDeathSequence(reason) {
     if (!flying || !alive || !flightController) return;
     alive = false;
+    chaseCamera.unlockPointer();
     health = 0;
     deathTimer = DEATH_SCREEN_DURATION;
     flightController.keys.clear();
@@ -2937,6 +2963,7 @@ async function main() {
     }
     flying = false;
     alive = false;
+    chaseCamera.unlockPointer();
     if (flightController) flightController.keys.clear();
     guns.resetLoadout();
     fleet.clear();
@@ -2957,6 +2984,7 @@ async function main() {
   }
 
   async function beginFlight(longitude, latitude) {
+    chaseCamera.lockPointer();
     startScreenUI.hide();
     spawnSelector.clearMarker();
     damageSmoke.clear();
