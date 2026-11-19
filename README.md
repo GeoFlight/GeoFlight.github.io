@@ -1,6 +1,6 @@
 # GeoFlight
 
-GeoFlight is a browser-based, 1:1 Earth flight simulator built with Cesium. Choose any point on the globe, spawn a jet above the terrain, and fly with a third-person chase camera.
+GeoFlight is a browser-based, 1:1 Earth flight simulator built with Cesium. Choose any point on the globe, spawn a jet above the terrain, and fly from its 3D cockpit by default; switch to a chase view any time to inspect the aircraft.
 
 ## Run it
 
@@ -23,8 +23,8 @@ Leave `MULTIPLAYER_URL` as `""` to run single-player with no network.
 
 Before you spawn, red dots on the globe show where every other pilot
 currently is. In flight, other aircraft render as tinted models with a callsign
-label, and a minimap in the top-left corner shows a tiled map centered on your
-position, your heading, and other pilots within the map view.
+label, and the 3D Cesium globe in the top-left corner shows your position,
+heading, and nearby pilots.
 
 ## Controls
 
@@ -37,22 +37,22 @@ position, your heading, and other pilots within the map view.
 | `Shift`, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
 | `R` | Reset to the selected spawn point |
+| `V` | Switch between the cockpit and chase camera |
 | Left click or hold | Fire guns; sustained fire overheats them, then they cool down |
 | Aim at an enemy for 3 seconds, then `F` | Lock and launch a missile |
 | `C` | Deploy a flare to decoy incoming missiles |
 | `[` / `]` | Nudge the model's nose alignment (debug) |
-| Right-drag | Orbit the chase camera |
-| Mouse wheel | Zoom the chase camera |
+| Right-drag | Look around from the cockpit |
 | `Esc` | Open or close in-flight settings; the online flight keeps running |
 | Full screen button | Enter or exit fullscreen |
 
-The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a controlled 180° reversal; hard banks use moderate assisted combat turning. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. The elevated chase camera smoothly follows the aircraft and can be orbited or zoomed while flying. Settings are saved in this browser.
+The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a controlled 180° reversal; hard banks use moderate assisted combat turning. Fly from the 3D cockpit and right-drag to look around; press `V` to switch to a chase view, where you can inspect the exterior aircraft. Remote pilots always see the exterior model. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. Settings are saved in this browser.
 
-Gun rounds are rendered as 3D projectiles, inherit the aircraft's velocity, and drop under gravity. A quick click fires at least one round; holding the button fires a stream. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km. Multiplayer pilots also see the live bullet tracers, missiles, and flares. The gun heat label and bar remain below the crosshair.
+Gun rounds use bright fireball sprites and glowing trails, inherit the aircraft's velocity, and drop under gravity. A quick click fires at least one round; holding the button fires a stream. Rounds despawn after traveling 12 km. Multiplayer pilots also see the same visible bullets, missiles, and flares. The gun HUD below the crosshair is just the heat bar.
 
-Keep an enemy within the aiming reticle for 3 seconds to lock on. The crosshair turns red while tracking, beeps and stays red when the lock is ready; press `F` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. All players are opponents in free-for-all combat and use the same aircraft model. The circular flight radar is a 3D Cesium globe centered on your position, with your aircraft in cyan and enemy pilots in red. Other pilots see your 3D bullet projectiles and tracer streaks in addition to missiles and flares.
+Keep an enemy within the aiming reticle for 3 seconds to lock on. The crosshair turns red while tracking, beeps and stays red when the lock is ready; press `F` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. All players are opponents in free-for-all combat and use the same aircraft model. The circular flight radar is a 3D Cesium globe centered on your position, with your heading shown as a blue arrow and enemy pilots as red arrows.
 
-Gun fire has mild leading aim assistance near an enemy reticle, while missile tracking accepts a target in a wider 24-degree cone and beeps after a 3-second continuous track.
+The speed readout is Mach; hold `Shift` to accelerate toward Mach 10, with throttle reaching full in about one second. Gun fire has mild leading aim assistance near an enemy reticle, while missile tracking accepts a target in a wider 24-degree cone and beeps after a 3-second continuous track. The minimap uses a blue heading arrow for you and red heading arrows for enemies.
 
 Your aircraft has 100 hull. Gun hits deal 12 damage and missile hits deal 40; the HULL display shows your remaining health. At 40 hull or lower, dark smoke trails from your aircraft. A lethal hit or ground impact explodes your plane, shows a brief destruction screen, then returns you to spawn selection. In multiplayer, every connected pilot is an opponent.
 

@@ -39,6 +39,7 @@ const CESIUM_ION_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IlhacXpNblJUY1J2eTg3U0QiLCJqdGkiOiJjNWIyNzAzZS1iY2IyLTRkZGEtYWQ2YS0yZDM1NWNmMDZmNjAiLCJpZCI6NDc3NDU1LCJzdWIiOiJwb2x5ZmxpZ2h0IiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6InBvbHlmbGlnaHQgd2ViIiwiaWF0IjoxNzg4MzgzNjIzfQ.hoBg5fsKviVL3a4u55JKuie57flzrKkSdUkRqjEOHTk";
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
+const COCKPIT_MODEL_URL = "assets/cockpit.glb";
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 15; // meters — avoids spawning inside the ground
 // The model file itself has been re-baked to real-world metres (19.43 m long)
 // with its nose on the +Z axis Cesium expects, so no scaling or axis fudging
@@ -79,18 +80,19 @@ const DEATH_SCREEN_DURATION = 3;
 const EXPLOSION_PARTICLE_COUNT = 26;
 const EXPLOSION_PARTICLE_LIFETIME = 1.6;
 const QUICK_TURN_DURATION = 3.0;
+const MAX_FLIGHT_SPEED = 3430;          // approximately Mach 10 at sea level, m/s
 const BULLET_SPEED = 900;              // m/s
-const BULLET_RANGE = 2500;             // meters before a round despawns
+const BULLET_RANGE = 12000;            // meters before a round despawns
 const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
 const FIRE_INTERVAL = 0.09;            // seconds between rounds
 const GUN_HEAT_PER_SECOND = 0.38;
 const GUN_COOL_PER_SECOND = 0.32;
 const GUN_OVERHEAT_RECOVERY = 0.35;
 const TRACER_INTERVAL = 2;             // denser tracer stream so rounds stay visible
-const TRACER_LENGTH = 24;              // meters
+const TRACER_LENGTH = 90;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
 const HIT_RADIUS = 14;                 // meters — approximate aircraft hit radius
-const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(4);
+const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(6);
 const GUN_AIM_ASSIST_DISTANCE = 3000;
 const MISSILE_DAMAGE = 40;
 const MISSILE_LOCK_TIME = 3;
@@ -126,6 +128,43 @@ function orientationAlongDirection(direction) {
   );
   Cesium.Cartesian3.normalize(axis, axis);
   return Cesium.Quaternion.fromAxisAngle(axis, Math.acos(dot));
+}
+
+function createBulletFireballImage() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 48;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not create the bullet fireball texture.");
+
+  const glow = context.createRadialGradient(76, 24, 2, 70, 24, 54);
+  glow.addColorStop(0, "rgba(255,255,235,1)");
+  glow.addColorStop(0.18, "rgba(255,226,105,0.98)");
+  glow.addColorStop(0.48, "rgba(255,116,24,0.8)");
+  glow.addColorStop(0.78, "rgba(235,48,8,0.42)");
+  glow.addColorStop(1, "rgba(180,20,0,0)");
+  context.fillStyle = glow;
+  context.beginPath();
+  context.ellipse(70, 24, 61, 20, 0, 0, Math.PI * 2);
+  context.fill();
+
+  const core = context.createLinearGradient(36, 24, 114, 24);
+  core.addColorStop(0, "rgba(255,114,15,0)");
+  core.addColorStop(0.35, "rgba(255,190,42,0.9)");
+  core.addColorStop(0.78, "rgba(255,255,220,1)");
+  core.addColorStop(1, "rgba(255,255,255,0.85)");
+  context.fillStyle = core;
+  context.beginPath();
+  context.ellipse(78, 24, 43, 7, 0, 0, Math.PI * 2);
+  context.fill();
+
+  for (let i = 0; i < 28; i++) {
+    const x = Math.random() * 112;
+    const y = 8 + Math.random() * 32;
+    context.fillStyle = i % 3 === 0 ? "rgba(255,255,210,0.9)" : "rgba(255,156,35,0.8)";
+    context.fillRect(x, y, 2 + Math.random() * 3, 1 + Math.random() * 2);
+  }
+  return canvas.toDataURL("image/png");
 }
 
 // Cesium automatically converts glTF 2.0's Y-up/Z-forward convention to its
@@ -368,7 +407,7 @@ class Aircraft {
       model: {
         uri: modelUrl,
         scale: AIRCRAFT_MODEL_SCALE,
-        minimumPixelSize: 0,
+        minimumPixelSize: 32,
         runAnimations: false,
         // Ambient fill — keeps the shaded side of the fuselage from crushing
         // to black, which is what makes an unlit model look flat and muddy.
@@ -378,6 +417,19 @@ class Aircraft {
         colorBlendAmount: AIRCRAFT_BRIGHTNESS_BLEND,
         // Self-shadowing on a model this detailed mostly produces speckled
         // artifacts rather than readable shadows.
+        shadows: Cesium.ShadowMode.DISABLED,
+      },
+      orientation: Cesium.Quaternion.IDENTITY,
+    });
+    this.entity.model.show = false;
+    this.cockpitEntity = world.viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
+      model: {
+        uri: COCKPIT_MODEL_URL,
+        scale: AIRCRAFT_MODEL_SCALE,
+        minimumPixelSize: 0,
+        runAnimations: false,
+        imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
         shadows: Cesium.ShadowMode.DISABLED,
       },
       orientation: Cesium.Quaternion.IDENTITY,
@@ -396,6 +448,12 @@ class Aircraft {
 
   destroy() {
     this.world.viewer.entities.remove(this.entity);
+    this.world.viewer.entities.remove(this.cockpitEntity);
+  }
+
+  setFirstPerson(enabled) {
+    this.entity.model.show = !enabled;
+    this.cockpitEntity.model.show = enabled;
   }
 
   /** Push a PlayerState onto the Cesium entity for this frame. */
@@ -425,6 +483,8 @@ class Aircraft {
 
     this.entity.position = position;
     this.entity.orientation = worldOrientation;
+    this.cockpitEntity.position = position;
+    this.cockpitEntity.orientation = Cesium.Quaternion.clone(worldOrientation);
   }
 }
 
@@ -756,10 +816,10 @@ class FlightController {
     this.maxTurnLoadFactor = 6;
     this.maxTurnRate = Cesium.Math.toRadians(65);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
-    this.maxSpeed = 900;        // high-speed jet range, rather than a supersonic game cap
-    this.throttleRate = 0.16;
-    this.maxThrustAcceleration = 24;
-    this.dragCoefficient = this.maxThrustAcceleration / this.maxSpeed;
+    this.maxSpeed = MAX_FLIGHT_SPEED;
+    this.throttleRate = 1;
+    this.maxThrustAcceleration = 1100;
+    this.dragCoefficient = 0.08;
     this.brakeDecel = 22;
     this.climbResponse = 2.8;
 
@@ -971,7 +1031,7 @@ class FlightController {
 }
 
 // ---------------------------------------------------------------------------
-// ChaseCamera — third-person camera locked behind/above an Aircraft
+// ChaseCamera — cockpit view with a third-person inspection camera
 // ---------------------------------------------------------------------------
 
 class ChaseCamera {
@@ -984,6 +1044,9 @@ class ChaseCamera {
     this.cameraElevation = Cesium.Math.toRadians(24);
     this.minDistance = 25;
     this.maxDistance = 180;
+    this.firstPerson = true;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
     this.isDragging = false;
     this.enabled = false;
     this.cameraPosition = null;
@@ -1006,15 +1069,24 @@ class ChaseCamera {
     window.addEventListener("mousemove", (event) => {
       if (!this.isDragging || !this.enabled) return;
       const sensitivity = this.settings.cameraSensitivity * 0.003;
-      this.cameraYaw -= event.movementX * sensitivity;
-      this.cameraPitch = Cesium.Math.clamp(
-        this.cameraPitch + event.movementY * sensitivity,
-        Cesium.Math.toRadians(-30),
-        Cesium.Math.toRadians(45)
-      );
+      if (this.firstPerson) {
+        this.lookYaw = Cesium.Math.negativePiToPi(this.lookYaw + event.movementX * sensitivity);
+        this.lookPitch = Cesium.Math.clamp(
+          this.lookPitch - event.movementY * sensitivity,
+          Cesium.Math.toRadians(-65),
+          Cesium.Math.toRadians(65)
+        );
+      } else {
+        this.cameraYaw -= event.movementX * sensitivity;
+        this.cameraPitch = Cesium.Math.clamp(
+          this.cameraPitch + event.movementY * sensitivity,
+          Cesium.Math.toRadians(-30),
+          Cesium.Math.toRadians(45)
+        );
+      }
     });
     window.addEventListener("wheel", (event) => {
-      if (!this.enabled) return;
+      if (!this.enabled || this.firstPerson) return;
       this.behindDistance = Cesium.Math.clamp(
         this.behindDistance + event.deltaY * 0.08,
         this.minDistance,
@@ -1029,6 +1101,8 @@ class ChaseCamera {
     this.cameraPosition = null;
     this.cameraYaw = 0;
     this.cameraPitch = 0;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
   }
 
   applyFieldOfView() {
@@ -1056,6 +1130,93 @@ class ChaseCamera {
       this.travelDirection ?? new Cesium.Cartesian3()
     );
     Cesium.Cartesian3.normalize(this.travelDirection, this.travelDirection);
+
+    if (this.firstPerson) {
+      const aircraftUp = Cesium.Cartesian3.subtract(
+        up,
+        Cesium.Cartesian3.multiplyByScalar(
+          this.travelDirection,
+          Cesium.Cartesian3.dot(up, this.travelDirection),
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      if (Cesium.Cartesian3.magnitudeSquared(aircraftUp) < 1e-6) {
+        Cesium.Cartesian3.clone(up, aircraftUp);
+      }
+      Cesium.Cartesian3.normalize(aircraftUp, aircraftUp);
+      const rollRotation = Cesium.Quaternion.fromAxisAngle(
+        this.travelDirection,
+        state.roll,
+        new Cesium.Quaternion()
+      );
+      const rolledUp = Cesium.Matrix3.multiplyByVector(
+        Cesium.Matrix3.fromQuaternion(rollRotation, new Cesium.Matrix3()),
+        aircraftUp,
+        new Cesium.Cartesian3()
+      );
+      const right = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.cross(this.travelDirection, rolledUp, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      const yawDirection = Cesium.Cartesian3.add(
+        Cesium.Cartesian3.multiplyByScalar(
+          this.travelDirection,
+          Math.cos(this.lookYaw),
+          new Cesium.Cartesian3()
+        ),
+        Cesium.Cartesian3.multiplyByScalar(
+          right,
+          Math.sin(this.lookYaw),
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      const direction = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.add(
+          Cesium.Cartesian3.multiplyByScalar(
+            yawDirection,
+            Math.cos(this.lookPitch),
+            new Cesium.Cartesian3()
+          ),
+          Cesium.Cartesian3.multiplyByScalar(
+            rolledUp,
+            Math.sin(this.lookPitch),
+            new Cesium.Cartesian3()
+          ),
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      const cameraRight = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.cross(direction, rolledUp, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      const cameraUp = Cesium.Cartesian3.normalize(
+        Cesium.Cartesian3.cross(cameraRight, direction, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      const cameraPosition = Cesium.Cartesian3.add(
+        position,
+        Cesium.Cartesian3.multiplyByScalar(
+          this.travelDirection,
+          -1.8,
+          new Cesium.Cartesian3()
+        ),
+        new Cesium.Cartesian3()
+      );
+      Cesium.Cartesian3.add(
+        cameraPosition,
+        Cesium.Cartesian3.multiplyByScalar(aircraftUp, 1.2, new Cesium.Cartesian3()),
+        cameraPosition
+      );
+      this.world.viewer.camera.setView({
+        destination: cameraPosition,
+        orientation: { direction, up: cameraUp },
+      });
+      this.cameraPosition = cameraPosition;
+      return;
+    }
 
     const right = Cesium.Cartesian3.cross(
       this.travelDirection,
@@ -1279,9 +1440,10 @@ class NetworkClient {
 // aircraft is interpolated toward its latest snapshot rather than teleporting.
 
 class RemoteFleet {
-  constructor(world, network) {
+  constructor(world, network, bulletImage) {
     this.world = world;
     this.network = network;
+    this.bulletImage = bulletImage;
     this.entities = new Map(); // id -> { entity, smoothed }
     this.ordnance = new Map();
   }
@@ -1302,8 +1464,8 @@ class RemoteFleet {
             position: Cesium.Cartesian3.fromDegrees(snap.lon, snap.lat, snap.alt),
             model: {
               uri: AIRCRAFT_MODEL_URL,
-              scale: AIRCRAFT_MODEL_SCALE * 1.35,
-              minimumPixelSize: 40,
+              scale: AIRCRAFT_MODEL_SCALE,
+              minimumPixelSize: 32,
               runAnimations: false,
               imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
               shadows: Cesium.ShadowMode.DISABLED,
@@ -1373,11 +1535,12 @@ class RemoteFleet {
               entity: this.world.viewer.entities.add({
                 position: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt),
                 ...(isBullet ? {
-                  cylinder: {
-                    length: 2.2,
-                    topRadius: 0.07,
-                    bottomRadius: 0.11,
-                    material: Cesium.Color.fromCssColorString("#ffd68a"),
+                  billboard: {
+                    image: this.bulletImage,
+                    width: 64,
+                    height: 24,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
                   },
                 } : isMissile ? {
                   cylinder: {
@@ -1398,14 +1561,14 @@ class RemoteFleet {
                 }),
                 polyline: {
                   positions: [],
-                  width: isBullet ? 5 : isMissile ? 3 : 2,
+                  width: isBullet ? 6 : isMissile ? 3 : 2,
                   material: new Cesium.PolylineGlowMaterialProperty({
                     color: isBullet
-                      ? Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.85)
+                      ? Cesium.Color.fromCssColorString("#ffb53d").withAlpha(1)
                       : isMissile
                         ? Cesium.Color.fromCssColorString("#ff6b35").withAlpha(0.75)
                         : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
-                    glowPower: isBullet ? 0.16 : 0.12,
+                    glowPower: isBullet ? 0.45 : 0.12,
                   }),
                   show: true,
                 },
@@ -1562,10 +1725,11 @@ class GlobeMarkers {
 // server-side before this is worth cheating at.
 
 class Guns {
-  constructor(world, network, fleet) {
+  constructor(world, network, fleet, bulletImage) {
     this.world = world;
     this.network = network;
     this.fleet = fleet;
+    this.bulletImage = bulletImage;
     this.bullets = [];
     this.cooldown = 0;
     this.firing = false;
@@ -2062,16 +2226,9 @@ class Guns {
       crosshair.classList.toggle("missile-locked", locked);
     }
     const heatFill = document.getElementById("gunHeatFill");
-    const gunStatus = document.getElementById("gunHeatStatus");
     if (heatFill) {
       heatFill.style.width = `${Math.round(this.gunHeat * 100)}%`;
       heatFill.classList.toggle("overheated", this.gunOverheated);
-    }
-    if (gunStatus) {
-      gunStatus.textContent = this.gunOverheated
-        ? "GUN OVERHEATED · COOLING"
-        : `GUN HEAT ${Math.round(this.gunHeat * 100)}%`;
-      gunStatus.classList.toggle("overheated", this.gunOverheated);
     }
   }
 
@@ -2113,23 +2270,19 @@ class Guns {
       tracer,
       entity: this.world.viewer.entities.add({
         position: muzzle,
-        orientation: orientationAlongDirection(velocity),
-        cylinder: {
-          length: 2.2,
-          topRadius: 0.07,
-          bottomRadius: 0.11,
-          material: tracer
-            ? Cesium.Color.fromCssColorString("#ffd68a")
-            : Cesium.Color.fromCssColorString("#b8c2c8"),
-          outline: true,
-          outlineColor: Cesium.Color.fromCssColorString("#553a1b"),
+        billboard: {
+          image: this.bulletImage,
+          width: 64,
+          height: 24,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
         },
         polyline: {
           positions: [muzzle, muzzle],
-          width: tracer ? 4 : 3,
+          width: 6,
           material: new Cesium.PolylineGlowMaterialProperty({
-            color: Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.75),
-            glowPower: 0.12,
+            color: Cesium.Color.fromCssColorString("#ffb53d").withAlpha(1),
+            glowPower: 0.45,
           }),
           show: true,
         },
@@ -2203,15 +2356,13 @@ class Guns {
       bullet.distance += Cesium.Cartesian3.distance(previousPosition, bullet.position);
       bullet.entity.position = bullet.position;
       bullet.entity.orientation = orientationAlongDirection(bullet.velocity);
-      if (bullet.tracer) {
-        const trailDirection = Cesium.Cartesian3.normalize(bullet.velocity, new Cesium.Cartesian3());
-        const trailStart = Cesium.Cartesian3.subtract(
-          bullet.position,
-          Cesium.Cartesian3.multiplyByScalar(trailDirection, TRACER_LENGTH, new Cesium.Cartesian3()),
-          new Cesium.Cartesian3()
-        );
-        bullet.entity.polyline.positions = [trailStart, bullet.position];
-      }
+      const trailDirection = Cesium.Cartesian3.normalize(bullet.velocity, new Cesium.Cartesian3());
+      const trailStart = Cesium.Cartesian3.subtract(
+        bullet.position,
+        Cesium.Cartesian3.multiplyByScalar(trailDirection, TRACER_LENGTH, new Cesium.Cartesian3()),
+        new Cesium.Cartesian3()
+      );
+      bullet.entity.polyline.positions = [trailStart, bullet.position];
 
       let consumed = bullet.life <= 0 || bullet.distance >= BULLET_RANGE;
       if (!consumed) {
@@ -2316,14 +2467,34 @@ class MiniMap {
     this.viewer.camera.frustum.fov = Cesium.Math.toRadians(48);
     this.ownMarker = this.viewer.entities.add({
       position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
-      point: {
-        pixelSize: 11,
-        color: Cesium.Color.fromCssColorString("#6ff2ff"),
-        outlineColor: Cesium.Color.WHITE,
-        outlineWidth: 2,
+      billboard: {
+        image: this._createArrowImage("#2878ff"),
+        width: 20,
+        height: 28,
+        rotation: 0,
         heightReference: Cesium.HeightReference.NONE,
       },
     });
+  }
+
+  _createArrowImage(color) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 48;
+    canvas.height = 48;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not create a minimap aircraft marker.");
+    context.beginPath();
+    context.moveTo(24, 3);
+    context.lineTo(43, 44);
+    context.lineTo(24, 35);
+    context.lineTo(5, 44);
+    context.closePath();
+    context.fillStyle = color;
+    context.fill();
+    context.lineWidth = 3;
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    return canvas.toDataURL("image/png");
   }
 
   show() {
@@ -2368,6 +2539,7 @@ class MiniMap {
       state.latitude,
       Math.max(0, state.height)
     );
+    this.ownMarker.billboard.rotation = -state.heading;
 
     const seen = new Set();
     for (const [id, player] of players) {
@@ -2377,11 +2549,11 @@ class MiniMap {
       let marker = this.enemies.get(id);
       if (!marker) {
         marker = this.viewer.entities.add({
-          point: {
-            pixelSize: 9,
-            color: Cesium.Color.fromCssColorString("#ff4b57"),
-            outlineColor: Cesium.Color.WHITE.withAlpha(0.9),
-            outlineWidth: 1.5,
+          billboard: {
+            image: this._createArrowImage("#f04452"),
+            width: 18,
+            height: 25,
+            rotation: 0,
             heightReference: Cesium.HeightReference.NONE,
           },
         });
@@ -2392,6 +2564,7 @@ class MiniMap {
         player.lat,
         Math.max(0, player.alt || 0)
       );
+      marker.billboard.rotation = -(Number.isFinite(player.hdg) ? player.hdg : 0);
     }
 
     for (const [id, marker] of this.enemies) {
@@ -2442,7 +2615,7 @@ class HUD {
 
   update(state) {
     this.altEl.textContent = `${Math.round(state.height)} m`;
-    this.speedEl.textContent = `${Math.round(state.speed)} m/s`;
+    this.speedEl.textContent = `${Math.min(10, state.speed / 343).toFixed(1)}`;
     this.latEl.textContent = `${state.latitude.toFixed(4)}°`;
     this.lonEl.textContent = `${state.longitude.toFixed(4)}°`;
   }
@@ -2648,8 +2821,9 @@ async function main() {
 
   const network = new NetworkClient(MULTIPLAYER_URL);
   const globeMarkers = new GlobeMarkers(world);
-  const fleet = new RemoteFleet(world, network);
-  const guns = new Guns(world, network, fleet);
+  const bulletImage = createBulletFireballImage();
+  const fleet = new RemoteFleet(world, network, bulletImage);
+  const guns = new Guns(world, network, fleet, bulletImage);
 
   let flightController = null;
   let aircraft = null;
@@ -2683,6 +2857,19 @@ async function main() {
   };
   network.connect();
 
+  window.addEventListener("keydown", (event) => {
+    if (
+      event.code !== "KeyV" ||
+      event.repeat ||
+      !flying ||
+      !alive ||
+      !document.getElementById("settingsMenu").classList.contains("hidden")
+    ) return;
+    chaseCamera.firstPerson = !chaseCamera.firstPerson;
+    aircraft.setFirstPerson(chaseCamera.firstPerson);
+    chaseCamera.reset();
+  });
+
   // Nose-alignment debug keys. Should not be needed with the shipped model.
   window.addEventListener("keydown", (e) => {
     if (!aircraft) return;
@@ -2701,7 +2888,11 @@ async function main() {
     guns.clear();
     damageSmoke.clear();
     explosion.start(flightController.state);
-    if (aircraft) aircraft.entity.model.show = false;
+    if (aircraft) {
+      chaseCamera.firstPerson = false;
+      aircraft.setFirstPerson(false);
+      chaseCamera.follow(flightController.state, 1 / 60);
+    }
     network.sendState(
       flightController.state,
       health,
@@ -2777,6 +2968,8 @@ async function main() {
     });
 
     aircraft = new Aircraft(world, AIRCRAFT_MODEL_URL);
+    chaseCamera.firstPerson = true;
+    aircraft.setFirstPerson(true);
     flightController = new FlightController(spawnState, settings);
     guns.clear();
     guns.resetLoadout();

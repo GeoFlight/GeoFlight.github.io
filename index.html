@@ -64,7 +64,7 @@
   <div id="flightHud" class="hidden">
     <div class="hud-title">GEOFLIGHT</div>
     <div class="hud-row"><span class="hud-key">ALT</span><span id="hudAlt" class="hud-val">0 m</span></div>
-    <div class="hud-row"><span class="hud-key">SPEED</span><span id="hudSpeed" class="hud-val">0 m/s</span></div>
+    <div class="hud-row"><span class="hud-key">MACH</span><span id="hudSpeed" class="hud-val">0.2</span></div>
     <div class="hud-row"><span class="hud-key">LAT</span><span id="hudLat" class="hud-val">0.0000°</span></div>
     <div class="hud-row"><span class="hud-key">LON</span><span id="hudLon" class="hud-val">0.0000°</span></div>
 
@@ -75,7 +75,7 @@
     <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
     <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
 
-    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Q · Quick 180° &nbsp; R · Reset<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake<br />Click · Guns &nbsp; F · Missile &nbsp; C · Flare<br />Right-drag · Camera &nbsp; Wheel · Zoom &nbsp; ESC · Settings</div>
+    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Q · Quick 180° &nbsp; R · Reset &nbsp; V · Camera view<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake<br />Click · Guns &nbsp; F · Missile &nbsp; C · Flare<br />Right-drag · Look around &nbsp; ESC · Settings</div>
   </div>
 
   <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
@@ -84,7 +84,6 @@
     <span class="cross-h"></span><span class="cross-v"></span>
   </div>
   <div id="weaponHud" class="weapon-hud hidden" aria-live="polite">
-    <div id="gunHeatStatus" class="gun-heat-status">GUN HEAT 0%</div>
     <div class="gun-heat-track"><div id="gunHeatFill" class="gun-heat-fill"></div></div>
   </div>
 
@@ -105,7 +104,7 @@
           <span>Field of view <output id="fieldOfViewValue"></output></span>
           <input id="fieldOfView" type="range" min="50" max="100" step="1" />
         </label>
-        <p class="settings-hint">Flight continues while settings are open. Right-drag to look around · Mouse wheel to zoom</p>
+        <p class="settings-hint">Flight continues while settings are open. Right-drag to look around; press V to switch cockpit/chase view.</p>
       </div>
       <div class="menu-actions">
         <button id="resumeFlightBtn" class="start-button" type="button">CLOSE SETTINGS</button>
@@ -124,6 +123,6 @@
     </div>
   </section>
 
-  <script src="game.js?v=20261119-combat-handling-v3"></script>
+  <script src="game.js?v=20261119-camera-view-polish-v2"></script>
 </body>
 </html>
