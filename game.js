@@ -40,7 +40,7 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const COCKPIT_MODEL_URL = "assets/cockpit.glb";
-const COCKPIT_EYE_FORWARD_OFFSET = 3.7;
+const COCKPIT_EYE_FORWARD_OFFSET = 2.7;
 const COCKPIT_EYE_HEIGHT_OFFSET = 2.05;
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 800; // meters — leaves room for aerobatic maneuvers
 // The model file itself has been re-baked to real-world metres (19.43 m long)
