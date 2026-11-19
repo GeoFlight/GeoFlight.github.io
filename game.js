@@ -40,8 +40,8 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const COCKPIT_MODEL_URL = "assets/cockpit.glb";
-const COCKPIT_EYE_FORWARD_OFFSET = 1.4;
-const COCKPIT_EYE_HEIGHT_OFFSET = 2.35;
+const COCKPIT_EYE_FORWARD_OFFSET = 1.7;
+const COCKPIT_EYE_HEIGHT_OFFSET = 2.05;
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 800; // meters — leaves room for aerobatic maneuvers
 // The model file itself has been re-baked to real-world metres (19.43 m long)
 // with its nose on the +Z axis Cesium expects, so no scaling or axis fudging
@@ -490,9 +490,10 @@ class Aircraft {
     // identity unless you nudge it with [ and ].
     this.noseCorrection = new Cesium.Quaternion();
     this.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
-    // The cockpit asset faces -Z while the aircraft model faces +Z.
+    // The cockpit faces opposite the aircraft; rotate around Cesium's local
+    // Z-up axis so it faces forward without flipping its vertical axis.
     this.cockpitAlignment = Cesium.Quaternion.fromAxisAngle(
-      Cesium.Cartesian3.UNIT_Y,
+      Cesium.Cartesian3.UNIT_Z,
       Math.PI,
       new Cesium.Quaternion()
     );
