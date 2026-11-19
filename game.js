@@ -133,27 +133,19 @@ function orientationAlongDirection(direction) {
   return Cesium.Quaternion.fromAxisAngle(axis, Math.acos(dot));
 }
 
-function createBulletTracerImage() {
+function createSmokeImage(red, green, blue) {
   const canvas = document.createElement("canvas");
-  canvas.width = 96;
-  canvas.height = 24;
+  canvas.width = 64;
+  canvas.height = 64;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Could not create the bullet tracer texture.");
+  if (!context) throw new Error("Could not create a smoke texture.");
 
-  const glow = context.createLinearGradient(0, 12, 96, 12);
-  glow.addColorStop(0, "rgba(255,90,12,0)");
-  glow.addColorStop(0.2, "rgba(255,125,24,0.25)");
-  glow.addColorStop(0.62, "rgba(255,183,58,0.62)");
-  glow.addColorStop(0.9, "rgba(255,236,160,0.95)");
-  glow.addColorStop(1, "rgba(180,20,0,0)");
-  context.fillStyle = glow;
-  context.fillRect(0, 5, canvas.width, 14);
-  context.fillStyle = "rgba(255,156,45,0.82)";
-  context.fillRect(18, 9, 64, 6);
-  context.fillStyle = "rgba(255,244,198,1)";
-  context.fillRect(65, 10, 25, 4);
-  context.fillStyle = "rgba(255,255,255,1)";
-  context.fillRect(84, 10, 10, 4);
+  const gradient = context.createRadialGradient(32, 32, 1, 32, 32, 32);
+  gradient.addColorStop(0, `rgba(${red}, ${green}, ${blue}, 0.72)`);
+  gradient.addColorStop(0.45, `rgba(${red}, ${green}, ${blue}, 0.42)`);
+  gradient.addColorStop(1, `rgba(${red}, ${green}, ${blue}, 0)`);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/png");
 }
 
@@ -281,6 +273,17 @@ class SpawnSelector {
     const longitude = Cesium.Math.toDegrees(carto.longitude);
     const latitude = Cesium.Math.toDegrees(carto.latitude);
 
+    if (this.ui.selectedMode === "multiplayer") {
+      if (!this.ui.selectedCountry) {
+        this.ui.onSpawnRejected("Choose a country before selecting a spawn point.");
+        return;
+      }
+      if (!this.ui.countryBoundaries.contains(this.ui.selectedCountry, longitude, latitude)) {
+        this.ui.onSpawnRejected(`Choose a spawn point inside ${this.ui.selectedCountry.properties.name}.`);
+        return;
+      }
+    }
+
     this._setSelection(longitude, latitude);
   }
 
@@ -313,9 +316,105 @@ class SpawnSelector {
     }
   }
 
+  clearSelection() {
+    this.selectedLonLat = null;
+    this.clearMarker();
+    this.ui.clearSpawnSelection();
+  }
+
   destroy() {
     this.handler.destroy();
   }
+}
+
+class CountryBoundaries {
+  constructor() {
+    this.features = [];
+    this.byName = new Map();
+  }
+
+  async load() {
+    if (this.features.length) return this.features;
+    const response = await fetch("assets/countries.geojson");
+    if (!response.ok) {
+      throw new Error(`Could not load country boundaries (${response.status}).`);
+    }
+    const data = await response.json();
+    if (data.type !== "FeatureCollection" || !Array.isArray(data.features)) {
+      throw new Error("Country boundary data is not a GeoJSON FeatureCollection.");
+    }
+    this.features = data.features
+      .filter((feature) =>
+        feature.type === "Feature" &&
+        typeof feature.properties?.name === "string" &&
+        feature.geometry &&
+        ["Polygon", "MultiPolygon"].includes(feature.geometry.type)
+      )
+      .sort((a, b) => a.properties.name.localeCompare(b.properties.name));
+    if (this.features.length === 0) throw new Error("No usable country boundaries were found.");
+    this.byName = new Map(this.features.map((feature) => [feature.properties.name, feature]));
+    return this.features;
+  }
+
+  contains(feature, longitude, latitude) {
+    if (!feature || !Number.isFinite(longitude) || !Number.isFinite(latitude)) return false;
+    const polygons = feature.geometry.type === "Polygon"
+      ? [feature.geometry.coordinates]
+      : feature.geometry.coordinates;
+    return polygons.some((polygon) =>
+      pointInRing(longitude, latitude, polygon[0]) &&
+      !polygon.slice(1).some((hole) => pointInRing(longitude, latitude, hole))
+    );
+  }
+
+  clampSegment(feature, previous, next) {
+    if (this.contains(feature, next.longitude, next.latitude)) return;
+    const longitudeDelta = ((next.longitude - previous.longitude + 540) % 360) - 180;
+    let inside = 0;
+    let outside = 1;
+    for (let i = 0; i < 24; i += 1) {
+      const progress = (inside + outside) / 2;
+      const longitude = ((previous.longitude + longitudeDelta * progress + 540) % 360) - 180;
+      const latitude = previous.latitude + (next.latitude - previous.latitude) * progress;
+      if (this.contains(feature, longitude, latitude)) inside = progress;
+      else outside = progress;
+    }
+    next.longitude = ((previous.longitude + longitudeDelta * inside + 540) % 360) - 180;
+    next.latitude = previous.latitude + (next.latitude - previous.latitude) * inside;
+  }
+}
+
+function pointInRing(longitude, latitude, ring) {
+  if (!Array.isArray(ring) || ring.length < 4) return false;
+  const points = [];
+  let previousLongitude = ring[0][0];
+  for (const [rawLongitude, pointLatitude] of ring) {
+    let pointLongitude = rawLongitude;
+    while (pointLongitude - previousLongitude > 180) pointLongitude -= 360;
+    while (pointLongitude - previousLongitude < -180) pointLongitude += 360;
+    points.push([pointLongitude, pointLatitude]);
+    previousLongitude = pointLongitude;
+  }
+  const centerLongitude = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+  const testLongitude = longitude + 360 * Math.round((centerLongitude - longitude) / 360);
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i];
+    const [xj, yj] = points[j];
+    const cross = (testLongitude - xi) * (yj - yi) - (latitude - yi) * (xj - xi);
+    if (
+      Math.abs(cross) < 1e-8 &&
+      testLongitude >= Math.min(xi, xj) &&
+      testLongitude <= Math.max(xi, xj) &&
+      latitude >= Math.min(yi, yj) &&
+      latitude <= Math.max(yi, yj)
+    ) return true;
+    if ((yi > latitude) !== (yj > latitude) &&
+        testLongitude < ((xj - xi) * (latitude - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +492,7 @@ class Aircraft {
     this.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
     // The cockpit asset faces -Z while the aircraft model faces +Z.
     this.cockpitAlignment = Cesium.Quaternion.fromAxisAngle(
-      Cesium.Cartesian3.UNIT_Z,
+      Cesium.Cartesian3.UNIT_Y,
       Math.PI,
       new Cesium.Quaternion()
     );
@@ -496,19 +595,7 @@ class DamageSmoke {
     this.particles = [];
     this.emissionRemainder = 0;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Could not create the aircraft smoke texture.");
-
-    const gradient = context.createRadialGradient(32, 32, 1, 32, 32, 32);
-    gradient.addColorStop(0, "rgba(45, 45, 45, 0.72)");
-    gradient.addColorStop(0.45, "rgba(65, 65, 65, 0.42)");
-    gradient.addColorStop(1, "rgba(85, 85, 85, 0)");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    this.image = canvas.toDataURL("image/png");
+    this.image = createSmokeImage(58, 58, 58);
   }
 
   update(dt, state, enabled) {
@@ -1333,11 +1420,13 @@ class NetworkClient {
     this.url = url;
     this.socket = null;
     this.id = null;
+    this.country = null;
     this.connected = false;
     this.players = new Map(); // id -> last known remote snapshot
     this.onRoster = () => {};
     this.onHit = () => {};
     this.onStatus = () => {};
+    this.onRoomStatus = () => {};
     this._retryDelay = 1000;
     this._lastSend = 0;
   }
@@ -1359,6 +1448,7 @@ class NetworkClient {
       this.connected = true;
       this._retryDelay = 1000;
       this.onStatus("ONLINE");
+      if (this.country) this._send({ type: "join-country", country: this.country });
     });
 
     this.socket.addEventListener("message", (event) => {
@@ -1418,6 +1508,9 @@ class NetworkClient {
         this.players.delete(msg.id);
         this.onRoster(this.players);
         break;
+      case "room-status":
+        this.onRoomStatus(msg);
+        break;
       case "hit":
         if (msg.target === this.id) this.onHit(msg);
         break;
@@ -1429,6 +1522,23 @@ class NetworkClient {
   _send(obj) {
     if (!this.connected || !this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify(obj));
+  }
+
+  joinCountry(country) {
+    if (typeof country !== "string" || country.length === 0) return;
+    if (this.country === country) return;
+    this.country = country;
+    this.players.clear();
+    this.onRoster(this.players);
+    this._send({ type: "join-country", country });
+  }
+
+  leaveCountry() {
+    if (this.country && this.connected) this._send({ type: "leave-country" });
+    this.country = null;
+    this.players.clear();
+    this.onRoster(this.players);
+    this.onRoomStatus({ country: null, count: 0 });
   }
 
   /** Rate-limited position broadcast. Called every frame; sends at STATE_SEND_HZ. */
@@ -1465,10 +1575,10 @@ class NetworkClient {
 // aircraft is interpolated toward its latest snapshot rather than teleporting.
 
 class RemoteFleet {
-  constructor(world, network, bulletImage) {
+  constructor(world, network) {
     this.world = world;
     this.network = network;
-    this.bulletImage = bulletImage;
+    this.flareSmokeImage = createSmokeImage(235, 32, 38);
     this.entities = new Map(); // id -> { entity, smoothed }
     this.ordnance = new Map();
   }
@@ -1553,6 +1663,7 @@ class RemoteFleet {
           if (!record) {
             const isBullet = kind === "bullet";
             const isMissile = kind === "missile";
+            const isFlare = kind === "flare";
             record = {
               snapshot: null,
               position: null,
@@ -1560,12 +1671,12 @@ class RemoteFleet {
               entity: this.world.viewer.entities.add({
                 position: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt),
                 ...(isBullet ? {
-                  billboard: {
-                    image: this.bulletImage,
-                    width: 38,
-                    height: 10,
+                  point: {
+                    pixelSize: 4,
+                    color: Cesium.Color.WHITE,
+                    outlineColor: Cesium.Color.fromCssColorString("#ffb53d"),
+                    outlineWidth: 1,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                    scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
                   },
                 } : isMissile ? {
                   cylinder: {
@@ -1576,24 +1687,26 @@ class RemoteFleet {
                     outline: true,
                     outlineColor: Cesium.Color.fromCssColorString("#35424c"),
                   },
-                } : {
-                  point: {
-                    pixelSize: 9,
-                    color: Cesium.Color.fromCssColorString("#ff9d4d"),
-                    outlineColor: Cesium.Color.WHITE.withAlpha(0.8),
-                    outlineWidth: 1,
+                } : isFlare ? {
+                  billboard: {
+                    image: this.flareSmokeImage,
+                    width: 36,
+                    height: 36,
+                    color: Cesium.Color.WHITE.withAlpha(0.8),
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
                   },
-                }),
+                } : {}),
                 polyline: {
                   positions: [],
-                  width: isBullet ? 3 : isMissile ? 3 : 2,
+                  width: isBullet ? 2 : isMissile ? 3 : 6,
                   material: new Cesium.PolylineGlowMaterialProperty({
                     color: isBullet
-                      ? Cesium.Color.fromCssColorString("#ffd98a").withAlpha(0.9)
+                      ? Cesium.Color.fromCssColorString("#fff3c4").withAlpha(0.95)
                       : isMissile
                         ? Cesium.Color.fromCssColorString("#ff6b35").withAlpha(0.75)
-                        : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
-                    glowPower: isBullet ? 0.22 : 0.12,
+                        : Cesium.Color.fromCssColorString("#e52f39").withAlpha(0.42),
+                    glowPower: isBullet ? 0.08 : isMissile ? 0.12 : 0.32,
                   }),
                   show: true,
                 },
@@ -1625,7 +1738,7 @@ class RemoteFleet {
             position,
             Cesium.Cartesian3.multiplyByScalar(
               direction,
-              isBullet ? TRACER_LENGTH : kind === "missile" ? 9 : 5,
+              isBullet ? TRACER_LENGTH : kind === "missile" ? 9 : 24,
               new Cesium.Cartesian3()
             ),
             new Cesium.Cartesian3()
@@ -1750,11 +1863,11 @@ class GlobeMarkers {
 // server-side before this is worth cheating at.
 
 class Guns {
-  constructor(world, network, fleet, bulletImage) {
+  constructor(world, network, fleet) {
     this.world = world;
     this.network = network;
     this.fleet = fleet;
-    this.bulletImage = bulletImage;
+    this.flareSmokeImage = createSmokeImage(235, 32, 38);
     this.bullets = [];
     this.cooldown = 0;
     this.firing = false;
@@ -1774,13 +1887,11 @@ class Guns {
     this.lockBeepPlayed = false;
     this.missileRequested = false;
     this.flareRequested = false;
-    this.weaponHudEl = document.getElementById("weaponHud");
     this.flightMenuEl = document.getElementById("settingsMenu");
     this.audioContext = null;
 
     window.addEventListener("pointerdown", (e) => {
       if (e.isPrimary && e.button === 0 &&
-          !this.weaponHudEl.classList.contains("hidden") &&
           this.flightMenuEl.classList.contains("hidden")) {
         this.firing = true;
         this.fireRequested = true;
@@ -1843,7 +1954,6 @@ class Guns {
     this._advance(dt);
     this._advanceMissiles(dt);
     this._advanceFlares(dt);
-    this._updateWeaponHud(alive);
   }
 
   cancelPendingActions() {
@@ -2079,16 +2189,20 @@ class Guns {
     );
     const entity = this.world.viewer.entities.add({
       position,
-      point: {
-        pixelSize: 10,
-        color: Cesium.Color.fromCssColorString("#ff9d4d"),
-        outlineColor: Cesium.Color.WHITE.withAlpha(0.9),
-        outlineWidth: 1,
+      billboard: {
+        image: this.flareSmokeImage,
+        width: 44,
+        height: 44,
+        color: Cesium.Color.WHITE.withAlpha(0.82),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
       },
       polyline: {
         positions: [position, position],
-        width: 2,
-        material: Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
+        width: 6,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          color: Cesium.Color.fromCssColorString("#e52f39").withAlpha(0.42),
+          glowPower: 0.32,
+        }),
       },
     });
     this.flares.push({
@@ -2225,11 +2339,14 @@ class Guns {
       const step = Cesium.Cartesian3.multiplyByScalar(flare.velocity, dt, new Cesium.Cartesian3());
       Cesium.Cartesian3.add(flare.position, step, flare.position);
       flare.entity.position = flare.position;
+      const progress = 1 - flare.life / FLARE_LIFETIME;
+      flare.entity.billboard.scale = 0.7 + progress * 1.8;
+      flare.entity.billboard.color = Cesium.Color.WHITE.withAlpha(0.82 * (1 - progress * 0.65));
       const direction = Cesium.Cartesian3.normalize(flare.velocity, new Cesium.Cartesian3());
       flare.entity.polyline.positions = [
         Cesium.Cartesian3.subtract(
           flare.position,
-          Cesium.Cartesian3.multiplyByScalar(direction, 5, new Cesium.Cartesian3()),
+          Cesium.Cartesian3.multiplyByScalar(direction, 24, new Cesium.Cartesian3()),
           new Cesium.Cartesian3()
         ),
         flare.position,
@@ -2240,32 +2357,6 @@ class Guns {
         this.flares.splice(i, 1);
       }
     }
-  }
-
-  _updateWeaponHud(alive) {
-    const tracking = alive && Boolean(this.lockTargetId) && this.lockProgress > 0;
-    const locked = tracking && this.lockProgress >= MISSILE_LOCK_TIME;
-    const crosshair = document.getElementById("crosshair");
-    if (crosshair) {
-      crosshair.classList.toggle("missile-tracking", tracking && !locked);
-      crosshair.classList.toggle("missile-locked", locked);
-    }
-    const heatFill = document.getElementById("gunHeatFill");
-    if (heatFill) {
-      heatFill.style.width = `${Math.round(this.gunHeat * 100)}%`;
-      heatFill.classList.toggle("overheated", this.gunOverheated);
-    }
-  }
-
-  showHud() {
-    document.getElementById("weaponHud").classList.remove("hidden");
-    this._updateWeaponHud(true);
-  }
-
-  hideHud() {
-    document.getElementById("weaponHud").classList.add("hidden");
-    const crosshair = document.getElementById("crosshair");
-    if (crosshair) crosshair.classList.remove("missile-tracking", "missile-locked");
   }
 
   _fire(state) {
@@ -2295,12 +2386,12 @@ class Guns {
       tracer,
       entity: this.world.viewer.entities.add({
         position: muzzle,
-        billboard: {
-          image: this.bulletImage,
-          width: 38,
-          height: 10,
+        point: {
+          pixelSize: 4,
+          color: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.fromCssColorString("#ffb53d"),
+          outlineWidth: 1,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: new Cesium.NearFarScalar(500, 1, 100000, 0.35),
         },
         polyline: {
           positions: [muzzle, muzzle],
@@ -2623,6 +2714,7 @@ class MiniMap {
 class HUD {
   constructor() {
     this.el = document.getElementById("flightHud");
+    this.combatPanelEl = document.getElementById("combatHudPanel");
     this.altEl = document.getElementById("hudAlt");
     this.speedEl = document.getElementById("hudSpeed");
     this.latEl = document.getElementById("hudLat");
@@ -2641,6 +2733,10 @@ class HUD {
 
   hide() {
     this.el.classList.add("hidden");
+  }
+
+  setMode(mode) {
+    this.combatPanelEl.classList.toggle("hidden", mode !== "multiplayer");
   }
 
   update(state) {
@@ -2800,38 +2896,138 @@ class FullscreenToggle {
 // ---------------------------------------------------------------------------
 
 class StartScreenUI {
-  constructor(onStartFlight) {
+  constructor(countryBoundaries, onStartFlight, onModeSelected, onCountrySelected, onBackToModes) {
+    this.countryBoundaries = countryBoundaries;
     this.onStartFlight = onStartFlight;
-    this.screenEl = document.getElementById("startScreen");
+    this.onModeSelected = onModeSelected;
+    this.onCountrySelected = onCountrySelected;
+    this.onBackToModes = onBackToModes;
+    this.modeEl = document.getElementById("modeSelection");
+    this.spawnSetupEl = document.getElementById("spawnSetup");
     this.selectionBox = document.getElementById("selectionBox");
     this.selectionCoords = document.getElementById("selectionCoords");
     this.startBtn = document.getElementById("startFlightBtn");
+    this.countryWrap = document.getElementById("countrySelectWrap");
+    this.countrySelect = document.getElementById("countrySelect");
+    this.countryStatusEl = document.getElementById("countryLobbyStatus");
+    this.modeMessageEl = document.getElementById("modeMessage");
+    this.spawnMessageEl = document.getElementById("spawnMessage");
+    this.spawnHeadlineEl = document.getElementById("spawnHeadline");
+    this.spawnDescriptionEl = document.getElementById("spawnDescription");
+    this.modeButtons = [
+      document.getElementById("singlePlayerModeBtn"),
+      document.getElementById("multiplayerModeBtn"),
+    ];
+    this.selectedMode = null;
+    this.selectedCountry = null;
     this.creditsToggle = document.getElementById("creditsToggle");
     this.creditsPanel = document.getElementById("creditsPanel");
 
     this.startBtn.addEventListener("click", () => {
       if (this.startBtn.disabled) return;
-      this.onStartFlight();
+      this.onStartFlight(this.selectedMode, this.selectedCountry);
     });
+    this.modeButtons[0].addEventListener("click", () => this.onModeSelected("explore"));
+    this.modeButtons[1].addEventListener("click", () => this.onModeSelected("multiplayer"));
+    this.countrySelect.addEventListener("change", () => {
+      this.selectedCountry = this.countryBoundaries.byName.get(this.countrySelect.value) || null;
+      this.clearSpawnSelection();
+      this.onCountrySelected(this.selectedCountry);
+    });
+    document.getElementById("backToModesBtn").addEventListener("click", () => this.onBackToModes());
 
     this.creditsToggle.addEventListener("click", () => {
       this.creditsPanel.classList.toggle("hidden");
     });
   }
 
+  showModeSelection() {
+    this.selectedMode = null;
+    this.selectedCountry = null;
+    this.modeEl.classList.remove("hidden");
+    this.spawnSetupEl.classList.add("hidden");
+    this.modeMessageEl.textContent = "";
+    this.countryStatusEl.textContent = "";
+    this.startBtn.disabled = true;
+  }
+
+  showModeError(message) {
+    this.modeMessageEl.textContent = message;
+  }
+
+  enterMode(mode, countries) {
+    this.selectedMode = mode;
+    this.modeEl.classList.add("hidden");
+    this.spawnSetupEl.classList.remove("hidden");
+    this.spawnMessageEl.textContent = "";
+    this.clearSpawnSelection();
+    this.countryWrap.classList.toggle("hidden", mode !== "multiplayer");
+    this.countryStatusEl.classList.toggle("hidden", mode !== "multiplayer");
+    if (mode === "multiplayer") {
+      this.spawnHeadlineEl.innerHTML = "CHOOSE A COUNTRY<br />AND SPAWN POINT";
+      this.spawnDescriptionEl.textContent = "Choose a country, then click inside its borders to join that country's fight.";
+      this.countrySelect.replaceChildren(new Option("Choose a country", ""));
+      for (const country of countries) {
+        this.countrySelect.add(new Option(country.properties.name, country.properties.name));
+      }
+      this.selectedCountry = null;
+      this.countryStatusEl.textContent = "Choose any country to see its lobby.";
+    } else {
+      this.spawnHeadlineEl.innerHTML = "EXPLORE THE<br />GLOBE";
+      this.spawnDescriptionEl.textContent = "Click anywhere on the globe to begin a peaceful single-player flight.";
+      this.selectedCountry = null;
+    }
+    this.updateStartButton();
+  }
+
   onSpawnSelected(longitude, latitude) {
     this.selectionBox.classList.remove("selection-box--empty");
     this.selectionBox.classList.add("selection-box--filled");
     this.selectionCoords.textContent = `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
-    this.startBtn.disabled = false;
+    this.spawnMessageEl.textContent = "";
+    this.updateStartButton();
+  }
+
+  onSpawnRejected(message) {
+    this.spawnMessageEl.textContent = message;
+  }
+
+  clearSpawnSelection() {
+    this.selectionBox.classList.remove("selection-box--filled");
+    this.selectionBox.classList.add("selection-box--empty");
+    this.selectionCoords.textContent = "Click the globe";
+    this.updateStartButton();
+  }
+
+  updateStartButton() {
+    this.startBtn.disabled = this.selectedMode === null ||
+      (this.selectedMode === "multiplayer" && !this.selectedCountry) ||
+      this.selectionBox.classList.contains("selection-box--empty");
+  }
+
+  updateCountryStatus(country, onlineCount) {
+    if (country !== this.selectedCountry?.properties.name) return;
+    this.countryStatusEl.textContent = onlineCount > 0
+      ? `${onlineCount} other pilot${onlineCount === 1 ? "" : "s"} online in this country.`
+      : "No other pilots online yet; this country lobby stays open.";
+  }
+
+  setCountryConnectionStatus(country, message) {
+    if (country === this.selectedCountry?.properties.name) {
+      this.countryStatusEl.textContent = message;
+    }
+  }
+
+  clearCountryStatus() {
+    this.countryStatusEl.textContent = "Choose any country to see its lobby.";
   }
 
   hide() {
-    this.screenEl.classList.add("hidden");
+    document.getElementById("startScreen").classList.add("hidden");
   }
 
   show() {
-    this.screenEl.classList.remove("hidden");
+    document.getElementById("startScreen").classList.remove("hidden");
   }
 }
 
@@ -2851,12 +3047,15 @@ async function main() {
 
   const network = new NetworkClient(MULTIPLAYER_URL);
   const globeMarkers = new GlobeMarkers(world);
-  const bulletImage = createBulletTracerImage();
-  const fleet = new RemoteFleet(world, network, bulletImage);
-  const guns = new Guns(world, network, fleet, bulletImage);
+  const fleet = new RemoteFleet(world, network);
+  const guns = new Guns(world, network, fleet);
+  const countryBoundaries = new CountryBoundaries();
 
   let flightController = null;
   let aircraft = null;
+  let gameMode = null;
+  let selectedCountry = null;
+  let spawnSelector = null;
   let flying = false;
   let health = MAX_HEALTH;
   let alive = true;
@@ -2877,17 +3076,29 @@ async function main() {
     () => leaveFlight()
   );
 
-  network.onStatus = (status) => hud.setNetStatus(status);
+  network.onStatus = (status) => {
+    hud.setNetStatus(status);
+    if (selectedCountry && status !== "ONLINE") {
+      startScreenUI.setCountryConnectionStatus(
+        selectedCountry.properties.name,
+        status === "OFFLINE"
+          ? "Multiplayer relay is not configured."
+          : "Connecting to the multiplayer relay..."
+      );
+    }
+  };
   // Red dots on the start-screen globe show where everyone already is, so you
   // can choose to spawn into the fight or well away from it.
   network.onRoster = (players) => globeMarkers.update(players);
   network.onHit = (msg) => {
-    if (!alive) return;
+    if (!alive || gameMode !== "multiplayer") return;
     health -= msg.damage ?? BULLET_DAMAGE;
     hud.banner("HIT", 600);
     if (health <= 0) beginDeathSequence("SHOT DOWN");
   };
-  network.connect();
+  network.onRoomStatus = ({ country, count }) => {
+    if (country) startScreenUI.updateCountryStatus(country, Math.max(0, count - 1));
+  };
 
   window.addEventListener("keydown", (event) => {
     if (
@@ -2926,25 +3137,69 @@ async function main() {
       aircraft.setFirstPerson(false);
       chaseCamera.follow(flightController.state, 1 / 60);
     }
-    network.sendState(
-      flightController.state,
-      health,
-      false,
-      guns.getNetworkOrdnance(),
-      true
-    );
-    hud.updateCombat(health, network.players.size + 1);
+    if (gameMode === "multiplayer") {
+      network.sendState(
+        flightController.state,
+        health,
+        false,
+        guns.getNetworkOrdnance(),
+        true
+      );
+      hud.updateCombat(health, network.players.size + 1);
+    }
     deathReasonEl.textContent = reason;
     deathCountdownEl.textContent = `${Math.ceil(deathTimer)}`;
     deathScreenEl.classList.remove("hidden");
   }
 
-  const startScreenUI = new StartScreenUI(async () => {
+  const startScreenUI = new StartScreenUI(
+    countryBoundaries,
+    async (mode, country) => {
     const { longitude, latitude } = spawnSelector.selectedLonLat;
-    await beginFlight(longitude, latitude);
-  });
-
-  const spawnSelector = new SpawnSelector(world, startScreenUI);
+      await beginFlight(longitude, latitude, mode, country);
+    },
+    async (mode) => {
+      network.leaveCountry();
+      selectedCountry = null;
+      try {
+        const countries = mode === "multiplayer" ? await countryBoundaries.load() : [];
+        startScreenUI.enterMode(mode, countries);
+      } catch (error) {
+        console.error("Could not load country boundaries.", error);
+        startScreenUI.showModeError("Country data could not be loaded. Please try again.");
+      }
+    },
+    (country) => {
+      selectedCountry = country;
+      if (country) {
+        network.joinCountry(country.properties.name);
+        startScreenUI.setCountryConnectionStatus(
+          country.properties.name,
+          network.connected
+            ? "Joining this country's lobby..."
+            : network.url
+              ? "Connecting to the multiplayer relay..."
+              : "Multiplayer relay is not configured."
+        );
+      } else {
+        network.leaveCountry();
+        startScreenUI.clearCountryStatus();
+      }
+    },
+    () => {
+      network.leaveCountry();
+      selectedCountry = null;
+      gameMode = null;
+      spawnSelector.clearSelection();
+      startScreenUI.showModeSelection();
+      world.viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(0, 20, 22000000),
+        duration: 1,
+      });
+    }
+  );
+  spawnSelector = new SpawnSelector(world, startScreenUI);
+  network.connect();
 
   function leaveFlight() {
     if (!flying) return;
@@ -2953,16 +3208,21 @@ async function main() {
     explosion.clear();
     deathScreenEl.classList.add("hidden");
     if (flightController) {
-      network.sendState(
-        flightController.state,
-        health,
-        false,
-        guns.getNetworkOrdnance(),
-        true
-      );
+      if (gameMode === "multiplayer") {
+        network.sendState(
+          flightController.state,
+          health,
+          false,
+          guns.getNetworkOrdnance(),
+          true
+        );
+      }
     }
+    network.leaveCountry();
     flying = false;
     alive = false;
+    gameMode = null;
+    selectedCountry = null;
     chaseCamera.unlockPointer();
     if (flightController) flightController.keys.clear();
     guns.resetLoadout();
@@ -2976,14 +3236,24 @@ async function main() {
     hud.hide();
     hud.clearBanner();
     miniMap.hide();
-    guns.hideHud();
-    const crosshair = document.getElementById("crosshair");
-    if (crosshair) crosshair.classList.add("hidden");
     globeMarkers.setVisible(true);
+    spawnSelector.clearSelection();
+    startScreenUI.showModeSelection();
     startScreenUI.show();
+    world.viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(0, 20, 22000000),
+      duration: 1,
+    });
   }
 
-  async function beginFlight(longitude, latitude) {
+  async function beginFlight(longitude, latitude, mode, country) {
+    gameMode = mode;
+    selectedCountry = country;
+    if (gameMode === "multiplayer" && selectedCountry) {
+      network.joinCountry(selectedCountry.properties.name);
+    } else {
+      network.leaveCountry();
+    }
     chaseCamera.lockPointer();
     startScreenUI.hide();
     spawnSelector.clearMarker();
@@ -3012,14 +3282,12 @@ async function main() {
     chaseCamera.enabled = true;
     world.viewer.scene.screenSpaceCameraController.enableInputs = false;
     hud.show();
+    hud.setMode(gameMode);
     hud.setNoseYaw(MODEL_NOSE_YAW_DEGREES);
-    miniMap.show();
-    guns.showHud();
-    const crosshair = document.getElementById("crosshair");
-    if (crosshair) crosshair.classList.remove("hidden");
+    if (gameMode === "multiplayer") miniMap.show();
     // The start-screen dots would otherwise sit inside the other aircraft now
     // that they're drawn as real models.
-    globeMarkers.setVisible(false);
+    globeMarkers.setVisible(gameMode !== "multiplayer");
     health = MAX_HEALTH;
     alive = true;
     flying = true;
@@ -3046,9 +3314,20 @@ async function main() {
       return;
     }
 
+    const previousFlightPosition = {
+      longitude: flightController.state.longitude,
+      latitude: flightController.state.latitude,
+    };
     flightController.update(dt);
 
     if (flightController.justReset) chaseCamera.reset();
+    if (gameMode === "multiplayer" && selectedCountry) {
+      countryBoundaries.clampSegment(
+        selectedCountry,
+        previousFlightPosition,
+        flightController.state
+      );
+    }
 
     // Ground-collision clamp: keep the aircraft from passing through
     // terrain. Done here (not inside FlightController.update) since it
@@ -3073,11 +3352,13 @@ async function main() {
     chaseCamera.follow(state, dt);
     hud.update(state);
 
-    fleet.update();
-    guns.update(dt, state, alive);
-    network.sendState(state, health, alive, guns.getNetworkOrdnance());
-    hud.updateCombat(health, network.players.size + 1);
-    miniMap.update(state, network.players);
+    guns.update(dt, state, alive && gameMode === "multiplayer");
+    if (gameMode === "multiplayer") {
+      fleet.update();
+      network.sendState(state, health, alive, guns.getNetworkOrdnance());
+      hud.updateCombat(health, network.players.size + 1);
+      miniMap.update(state, network.players);
+    }
   });
 }
 

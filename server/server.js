@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 8080;
 const HEARTBEAT_MS = 30000;   // Render closes idle sockets; ping keeps them warm
 const ROSTER_MS = 1000;       // full roster broadcast rate (for start-screen dots)
 
-const players = new Map(); // ws -> { id, lon, lat, alt, hdg, pit, rol, spd, hp, alive }
+const players = new Map(); // ws -> { id, country, lon, lat, alt, hdg, pit, rol, spd, hp, alive }
 
 // Render's health checks hit plain HTTP, so the WS server rides on an HTTP one.
 const server = http.createServer((req, res) => {
@@ -35,16 +35,31 @@ function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
 
-function broadcast(obj, exclude) {
+function playersInCountry(country) {
+  return [...players.entries()].filter(([, player]) => player.country === country);
+}
+
+function broadcastToCountry(country, obj, exclude) {
+  if (!country) return;
   const payload = JSON.stringify(obj);
-  for (const [ws] of players) {
-    if (ws !== exclude && ws.readyState === ws.OPEN) ws.send(payload);
+  for (const [ws, player] of players) {
+    if (player.country === country && ws !== exclude && ws.readyState === ws.OPEN) {
+      ws.send(payload);
+    }
+  }
+}
+
+function sendCountryStatus(country) {
+  if (!country) return;
+  const room = playersInCountry(country);
+  for (const [ws] of room) {
+    send(ws, { type: "room-status", country, count: room.length });
   }
 }
 
 wss.on("connection", (ws) => {
   const id = makeId();
-  players.set(ws, { id, alive: true, hp: 100 });
+  players.set(ws, { id, country: null, alive: false, hp: 100 });
   ws.isAlive = true;
 
   send(ws, { type: "welcome", id });
@@ -62,7 +77,53 @@ wss.on("connection", (ws) => {
     const player = players.get(ws);
     if (!player) return;
 
+    if (msg.type === "join-country") {
+      const country = typeof msg.country === "string" ? msg.country.trim().slice(0, 80) : "";
+      if (!country) return;
+      const previousCountry = player.country;
+      if (previousCountry && previousCountry !== country) {
+        broadcastToCountry(previousCountry, { type: "leave", id: player.id }, ws);
+        player.country = null;
+        player.lon = undefined;
+        player.lat = undefined;
+        player.alive = false;
+        sendCountryStatus(previousCountry);
+      }
+      player.country = country;
+      const roster = playersInCountry(country)
+        .filter(([otherWs, other]) => otherWs !== ws && other.lon !== undefined)
+        .map(([, other]) => ({
+          id: other.id,
+          lon: other.lon,
+          lat: other.lat,
+          alt: other.alt,
+          hdg: other.hdg,
+          pit: other.pit,
+          rol: other.rol,
+          spd: other.spd,
+          hp: other.hp,
+          alive: other.alive,
+        }));
+      send(ws, { type: "roster", players: roster });
+      sendCountryStatus(country);
+      return;
+    }
+
+    if (msg.type === "leave-country") {
+      const previousCountry = player.country;
+      player.country = null;
+      player.lon = undefined;
+      player.lat = undefined;
+      player.alive = false;
+      if (previousCountry) {
+        broadcastToCountry(previousCountry, { type: "leave", id: player.id }, ws);
+        sendCountryStatus(previousCountry);
+      }
+      return;
+    }
+
     if (msg.type === "state") {
+      if (!player.country) return;
       Object.assign(player, {
         lon: msg.lon,
         lat: msg.lat,
@@ -76,13 +137,18 @@ wss.on("connection", (ws) => {
       });
       // Position updates go out immediately rather than waiting for the next
       // roster tick, otherwise dogfighting feels laggy.
-      broadcast({ type: "state", id: player.id, ...msg }, ws);
+      broadcastToCountry(
+        player.country,
+        { ...msg, type: "state", id: player.id, country: player.country },
+        ws
+      );
       return;
     }
 
     if (msg.type === "hit") {
+      if (!player.country) return;
       for (const [targetWs, target] of players) {
-        if (target.id === msg.target) {
+        if (target.country === player.country && target.id === msg.target) {
           send(targetWs, {
             type: "hit",
             target: msg.target,
@@ -98,7 +164,10 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     const player = players.get(ws);
     players.delete(ws);
-    if (player) broadcast({ type: "leave", id: player.id });
+    if (player && player.country) {
+      broadcastToCountry(player.country, { type: "leave", id: player.id });
+      sendCountryStatus(player.country);
+    }
   });
 });
 
@@ -106,12 +175,24 @@ wss.on("connection", (ws) => {
 // messages; this exists so the start screen can show red dots for everyone
 // before you've spawned, and so a client that missed an update recovers.
 setInterval(() => {
-  const roster = [...players.values()]
-    .filter((p) => p.lon !== undefined)
-    .map(({ id, lon, lat, alt, hdg, pit, rol, spd, hp, alive }) => ({
-      id, lon, lat, alt, hdg, pit, rol, spd, hp, alive,
-    }));
-  broadcast({ type: "roster", players: roster });
+  for (const [ws, player] of players) {
+    if (!player.country || ws.readyState !== ws.OPEN) continue;
+    const roster = playersInCountry(player.country)
+      .filter(([otherWs, other]) => otherWs !== ws && other.lon !== undefined)
+      .map(([, other]) => ({
+        id: other.id,
+        lon: other.lon,
+        lat: other.lat,
+        alt: other.alt,
+        hdg: other.hdg,
+        pit: other.pit,
+        rol: other.rol,
+        spd: other.spd,
+        hp: other.hp,
+        alive: other.alive,
+      }));
+    send(ws, { type: "roster", players: roster });
+  }
 }, ROSTER_MS);
 
 // Drop sockets that stopped answering instead of leaving ghost planes in the

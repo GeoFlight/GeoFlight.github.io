@@ -155,6 +155,86 @@ html, body {
   max-width: 34ch;
 }
 
+.mode-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.mode-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  color: var(--text-primary);
+  background: rgba(8, 18, 28, 0.72);
+  border: 1px solid var(--panel-border);
+  border-left: 2px solid var(--instrument-cyan-dim);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.mode-button:hover {
+  border-color: var(--instrument-cyan);
+  background: rgba(94, 238, 203, 0.09);
+}
+
+.mode-button strong {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.mode-button span,
+.country-lobby-status,
+.mode-message {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mode-message:empty,
+.country-lobby-status:empty {
+  display: none;
+}
+
+.country-select-wrap {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.country-select {
+  width: 100%;
+  margin-top: 5px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: #101923;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+}
+
+.country-select option {
+  color: var(--text-primary);
+  background: #101923;
+}
+
+.country-lobby-status,
+.mode-message {
+  margin: 8px 0;
+}
+
+.back-to-modes {
+  margin-top: 12px;
+  padding: 4px 0;
+  color: var(--instrument-cyan-dim);
+  background: transparent;
+  border: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
 .selection-box {
   border: 1px dashed rgba(94, 238, 203, 0.3);
   border-radius: 3px;
@@ -425,65 +505,7 @@ html, body {
   font-size: 11px;
 }
 
-/* ===================== CROSSHAIR + BANNER ===================== */
-
-#crosshair {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 26px;
-  height: 26px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  opacity: 0.75;
-}
-
-.cross-h, .cross-v {
-  position: absolute;
-  background: var(--instrument-cyan);
-}
-
-.cross-h {
-  top: 50%; left: 0;
-  width: 100%; height: 1px;
-  transform: translateY(-50%);
-}
-
-.cross-v {
-  left: 50%; top: 0;
-  height: 100%; width: 1px;
-  transform: translateX(-50%);
-}
-
-#crosshair.missile-tracking,
-#crosshair.missile-locked {
-  opacity: 1;
-}
-
-#crosshair.missile-tracking .cross-h,
-#crosshair.missile-tracking .cross-v,
-#crosshair.missile-locked .cross-h,
-#crosshair.missile-locked .cross-v {
-  background: var(--danger);
-  box-shadow: 0 0 5px var(--danger);
-}
-
-#crosshair.missile-locked::before {
-  position: absolute;
-  inset: -5px;
-  border: 1px solid var(--danger);
-  border-radius: 50%;
-  box-shadow: 0 0 7px rgba(255, 107, 94, 0.7);
-  content: "";
-}
-
-#crosshair.missile-tracking::before {
-  position: absolute;
-  inset: 2px;
-  border: 1px solid rgba(255, 107, 94, 0.55);
-  border-radius: 50%;
-  content: "";
-}
+/* ===================== CENTRE BANNER ===================== */
 
 #centerBanner {
   position: absolute;
@@ -559,35 +581,6 @@ html, body {
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
-
-.weapon-hud {
-  position: absolute;
-  top: calc(50% + 28px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 132px;
-  padding: 0;
-  background: transparent;
-  border-radius: 3px;
-  pointer-events: none;
-}
-
-.gun-heat-track {
-  height: 5px;
-  margin-top: 0;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.gun-heat-fill {
-  width: 0;
-  height: 100%;
-  background: var(--instrument-cyan);
-  transition: width 0.08s linear, background 0.15s ease;
-}
-
-.gun-heat-fill.overheated { background: var(--danger); }
 
 .minimap-attribution {
   padding-top: 2px;

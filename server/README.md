@@ -28,7 +28,9 @@ Use `wss://` for the WebSocket URL, not `ws://` or `https://`. GitHub Pages is
 HTTPS and browsers block insecure WebSocket connections.
 
 Free Render services may sleep when idle and take time to wake; the client
-reconnects automatically.
+reconnects automatically. Multiplayer clients join a country-specific room;
+player states, rosters, hits, and lobby counts are only relayed within that
+country. Empty lobbies are not disabled and can be joined at any time.
 
 ## Test locally
 

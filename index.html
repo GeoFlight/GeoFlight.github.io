@@ -24,23 +24,43 @@
     </header>
 
     <div class="start-panel">
-      <h1 class="headline">CHOOSE YOUR<br />SPAWN POINT</h1>
-      <p class="subtitle">1:1 EARTH · FLIGHT SIMULATOR</p>
-      <p class="description">
-        Explore the globe, then click a location. Your aircraft will spawn in flight above that terrain.
-      </p>
-
-      <div id="selectionBox" class="selection-box selection-box--empty">
-        <span class="selection-label">SELECTED LOCATION</span>
-        <span id="selectionCoords" class="selection-coords">No location selected</span>
+      <div id="modeSelection">
+        <h1 class="headline">CHOOSE YOUR<br />FLIGHT MODE</h1>
+        <p class="subtitle">1:1 EARTH · FLIGHT SIMULATOR</p>
+        <p class="description">Explore the globe alone or join a free-for-all fight in any country.</p>
+        <div class="mode-actions">
+          <button id="singlePlayerModeBtn" class="mode-button" type="button">
+            <strong>SINGLE PLAYER</strong><span>Explore the globe</span>
+          </button>
+          <button id="multiplayerModeBtn" class="mode-button" type="button">
+            <strong>MULTIPLAYER</strong><span>Fight in a country</span>
+          </button>
+        </div>
+        <p id="modeMessage" class="mode-message" role="status"></p>
       </div>
 
-      <button id="startFlightBtn" class="start-button" disabled>START FLIGHT</button>
-
-      <div class="hint-row">
-        <div class="hint"><span class="hint-key">Click</span><span class="hint-label">Select</span></div>
-        <div class="hint"><span class="hint-key">Drag</span><span class="hint-label">Rotate</span></div>
-        <div class="hint"><span class="hint-key">Wheel</span><span class="hint-label">Zoom</span></div>
+      <div id="spawnSetup" class="hidden">
+        <h1 id="spawnHeadline" class="headline">CHOOSE YOUR<br />SPAWN POINT</h1>
+        <p id="spawnDescription" class="description">Click the globe to choose where to begin exploring.</p>
+        <label id="countrySelectWrap" class="country-select-wrap hidden" for="countrySelect">
+          <span class="selection-label">FIGHTING COUNTRY</span>
+          <select id="countrySelect" class="country-select">
+            <option value="">Choose a country</option>
+          </select>
+        </label>
+        <p id="countryLobbyStatus" class="country-lobby-status" role="status"></p>
+        <p id="spawnMessage" class="mode-message" role="status"></p>
+        <div id="selectionBox" class="selection-box selection-box--empty">
+          <span class="selection-label">SELECTED LOCATION</span>
+          <span id="selectionCoords" class="selection-coords">Click the globe</span>
+        </div>
+        <button id="startFlightBtn" class="start-button" disabled>START FLIGHT</button>
+        <div class="hint-row">
+          <div class="hint"><span class="hint-key">Click</span><span class="hint-label">Select</span></div>
+          <div class="hint"><span class="hint-key">Drag</span><span class="hint-label">Rotate</span></div>
+          <div class="hint"><span class="hint-key">Wheel</span><span class="hint-label">Zoom</span></div>
+        </div>
+        <button id="backToModesBtn" class="back-to-modes" type="button">BACK TO FLIGHT MODES</button>
       </div>
     </div>
 
@@ -68,24 +88,20 @@
     <div class="hud-row"><span class="hud-key">LAT</span><span id="hudLat" class="hud-val">0.0000°</span></div>
     <div class="hud-row"><span class="hud-key">LON</span><span id="hudLon" class="hud-val">0.0000°</span></div>
 
-    <div class="hud-divider"></div>
-    <div class="hud-row"><span class="hud-key">HULL</span><span id="hudHealth" class="hud-val">100</span></div>
-    <div class="health-track"><div id="hudHealthBar" class="health-fill"></div></div>
-    <div class="hud-row"><span class="hud-key">PILOTS</span><span id="hudPlayers" class="hud-val">1</span></div>
-    <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
-    <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
+    <div id="combatHudPanel" class="hidden">
+      <div class="hud-divider"></div>
+      <div class="hud-row"><span class="hud-key">HULL</span><span id="hudHealth" class="hud-val">100</span></div>
+      <div class="health-track"><div id="hudHealthBar" class="health-fill"></div></div>
+      <div class="hud-row"><span class="hud-key">PILOTS</span><span id="hudPlayers" class="hud-val">1</span></div>
+      <div class="hud-row"><span class="hud-key">NET</span><span id="hudNet" class="hud-val">OFFLINE</span></div>
+      <div class="hud-row hud-row--debug"><span class="hud-key">NOSE</span><span id="hudYaw" class="hud-val">0°</span></div>
+    </div>
 
-    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Q · Quick 180° &nbsp; R · Reset &nbsp; V · Camera view<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake<br />Click · Guns &nbsp; F · Missile &nbsp; C · Flare<br />Mouse · Look around &nbsp; ESC · Unlock / Settings</div>
+    <div class="hud-controls-hint">W/S · Pitch &nbsp; A/D or ←/→ · Turn &nbsp; X · Level out<br />Q · Quick 180° &nbsp; R · Reset &nbsp; V · Camera view<br />Shift · Throttle &nbsp; Ctrl/↓ · Brake<br />Glass sight · Aim & fire &nbsp; F · Missile &nbsp; C · Flare<br />Mouse · Look around &nbsp; ESC · Unlock / Settings</div>
   </div>
 
-  <!-- ===================== CENTRE BANNER + CROSSHAIR ===================== -->
+  <!-- ===================== CENTRE BANNER ===================== -->
   <div id="centerBanner" class="hidden"></div>
-  <div id="crosshair" class="hidden">
-    <span class="cross-h"></span><span class="cross-v"></span>
-  </div>
-  <div id="weaponHud" class="weapon-hud hidden" aria-live="polite">
-    <div class="gun-heat-track"><div id="gunHeatFill" class="gun-heat-fill"></div></div>
-  </div>
 
   <section id="settingsMenu" class="settings-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <div class="settings-panel">
@@ -119,10 +135,10 @@
       <p class="death-eyebrow">FLIGHT TERMINATED</p>
       <h1 id="deathTitle">AIRCRAFT DESTROYED</h1>
       <p id="deathReason">GROUND IMPACT</p>
-      <p class="death-return">RETURNING TO SPAWN SELECT IN <span id="deathCountdown">3</span></p>
+      <p class="death-return">RETURNING TO FLIGHT MODES IN <span id="deathCountdown">3</span></p>
     </div>
   </section>
 
-  <script src="game.js?v=20261119-aerobatics-pointerlock-v6"></script>
+  <script src="game.js?v=20261119-country-modes-v1"></script>
 </body>
 </html>
