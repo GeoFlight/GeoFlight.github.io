@@ -32,7 +32,7 @@ position, your heading, and other pilots within the map view.
 | --- | --- |
 | `W` / `S` | Pitch up / down; hold for a full loop |
 | `A` / `D` or Left / Right arrows | Bank and turn; hold for a full roll |
-| `Q` | Perform a quick 180° turn |
+| `Q` | Perform a controlled 180° turn |
 | Hold `X` | Smoothly level the aircraft |
 | `Shift`, Up arrow, or `I` | Increase throttle |
 | `Ctrl`, Down arrow, or `K` | Reduce throttle and brake; use briefly in a bank for a tighter airbrake turn |
@@ -46,11 +46,13 @@ position, your heading, and other pilots within the map view.
 | `Esc` | Open or close in-flight settings; the online flight keeps running |
 | Full screen button | Enter or exit fullscreen |
 
-The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a fast 180° reversal; hard banks also use assisted combat turning. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. The elevated chase camera smoothly follows the aircraft and can be orbited or zoomed while flying. Settings are saved in this browser.
+The aircraft retains its pitch and bank after you release the controls. Hold `X` to smoothly return to level flight, or use the opposite key for manual corrections. Press `Q` for a controlled 180° reversal; hard banks use moderate assisted combat turning. Use in-flight Settings to change steering and camera sensitivity or field of view. The settings overlay does not pause the online simulation. Leave Flight returns to spawn selection. The elevated chase camera smoothly follows the aircraft and can be orbited or zoomed while flying. Settings are saved in this browser.
 
 Gun rounds are rendered as 3D projectiles, inherit the aircraft's velocity, and drop under gravity. A quick click fires at least one round; holding the button fires a stream. Tracer streaks appear periodically in the stream, and rounds despawn after traveling 2.5 km. Multiplayer pilots also see the live bullet tracers, missiles, and flares. The gun heat label and bar remain below the crosshair.
 
 Keep an enemy within the aiming reticle for 3 seconds to lock on. The crosshair turns red while tracking, beeps and stays red when the lock is ready; press `F` to launch. Missiles home toward their locked target and appear to other pilots. Press `C` to drop a flare; a nearby flare can pull an incoming missile off course. All players are opponents in free-for-all combat and use the same aircraft model. The circular flight radar is a 3D Cesium globe centered on your position, with your aircraft in cyan and enemy pilots in red. Other pilots see your 3D bullet projectiles and tracer streaks in addition to missiles and flares.
+
+Gun fire has mild leading aim assistance near an enemy reticle, while missile tracking accepts a target in a wider 24-degree cone and beeps after a 3-second continuous track.
 
 Your aircraft has 100 hull. Gun hits deal 12 damage and missile hits deal 40; the HULL display shows your remaining health. At 40 hull or lower, dark smoke trails from your aircraft. A lethal hit or ground impact explodes your plane, shows a brief destruction screen, then returns you to spawn selection. In multiplayer, every connected pilot is an opponent.
 

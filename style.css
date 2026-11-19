@@ -477,6 +477,14 @@ html, body {
   content: "";
 }
 
+#crosshair.missile-tracking::before {
+  position: absolute;
+  inset: 2px;
+  border: 1px solid rgba(255, 107, 94, 0.55);
+  border-radius: 50%;
+  content: "";
+}
+
 #centerBanner {
   position: absolute;
   top: 38%;

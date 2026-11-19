@@ -78,7 +78,7 @@ const SMOKE_PARTICLE_LIFETIME = 3;
 const DEATH_SCREEN_DURATION = 3;
 const EXPLOSION_PARTICLE_COUNT = 26;
 const EXPLOSION_PARTICLE_LIFETIME = 1.6;
-const QUICK_TURN_DURATION = 1.25;
+const QUICK_TURN_DURATION = 3.0;
 const BULLET_SPEED = 900;              // m/s
 const BULLET_RANGE = 2500;             // meters before a round despawns
 const BULLET_LIFETIME = BULLET_RANGE / BULLET_SPEED;
@@ -86,13 +86,15 @@ const FIRE_INTERVAL = 0.09;            // seconds between rounds
 const GUN_HEAT_PER_SECOND = 0.38;
 const GUN_COOL_PER_SECOND = 0.32;
 const GUN_OVERHEAT_RECOVERY = 0.35;
-const TRACER_INTERVAL = 5;             // only a portion of the stream is visibly traced
+const TRACER_INTERVAL = 2;             // denser tracer stream so rounds stay visible
 const TRACER_LENGTH = 24;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
-const HIT_RADIUS = 8;                  // meters — approximate aircraft hit radius
+const HIT_RADIUS = 14;                 // meters — approximate aircraft hit radius
+const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(4);
+const GUN_AIM_ASSIST_DISTANCE = 3000;
 const MISSILE_DAMAGE = 40;
 const MISSILE_LOCK_TIME = 3;
-const MISSILE_LOCK_CONE = Cesium.Math.toRadians(12);
+const MISSILE_LOCK_CONE = Cesium.Math.toRadians(24);
 const MISSILE_LOCK_RANGE = 6000;
 const MISSILE_MAX_TURN_RATE = Cesium.Math.toRadians(75);
 const MISSILE_INITIAL_BOOST = 300;      // m/s added to the aircraft's velocity
@@ -751,8 +753,8 @@ class FlightController {
     this.angularDamping = 2.4;
     this.turnBankLimit = Cesium.Math.toRadians(70);
     this.bankTurnStrength = 9.81;
-    this.maxTurnLoadFactor = 12;
-    this.maxTurnRate = Cesium.Math.toRadians(105);
+    this.maxTurnLoadFactor = 6;
+    this.maxTurnRate = Cesium.Math.toRadians(65);
     this.minSpeed = 0;          // braking can bring a landed aircraft to rest
     this.maxSpeed = 900;        // high-speed jet range, rather than a supersonic game cap
     this.throttleRate = 0.16;
@@ -872,7 +874,7 @@ class FlightController {
       // stay responsive without allowing an unbounded turn rate.
       const airbrakeTurnBoost = braking ? 1.2 : 1;
       const turnAcceleration = Math.min(
-        Math.abs(this.bankTurnStrength * Math.tan(turnBank)) * airbrakeTurnBoost * 4,
+        Math.abs(this.bankTurnStrength * Math.tan(turnBank)) * airbrakeTurnBoost * 1.5,
         this.maxTurnLoadFactor * 9.81
       );
       const turnSpeed = Math.max(5, Math.min(s.speed, 90));
@@ -1300,8 +1302,8 @@ class RemoteFleet {
             position: Cesium.Cartesian3.fromDegrees(snap.lon, snap.lat, snap.alt),
             model: {
               uri: AIRCRAFT_MODEL_URL,
-              scale: AIRCRAFT_MODEL_SCALE,
-              minimumPixelSize: 24, // stay visible as a speck at long range
+              scale: AIRCRAFT_MODEL_SCALE * 1.35,
+              minimumPixelSize: 40,
               runAnimations: false,
               imageBasedLightingFactor: new Cesium.Cartesian2(MODEL_AMBIENT, MODEL_AMBIENT),
               shadows: Cesium.ShadowMode.DISABLED,
@@ -1372,9 +1374,9 @@ class RemoteFleet {
                 position: Cesium.Cartesian3.fromDegrees(item.lon, item.lat, item.alt),
                 ...(isBullet ? {
                   cylinder: {
-                    length: 1.4,
-                    topRadius: 0.045,
-                    bottomRadius: 0.07,
+                    length: 2.2,
+                    topRadius: 0.07,
+                    bottomRadius: 0.11,
                     material: Cesium.Color.fromCssColorString("#ffd68a"),
                   },
                 } : isMissile ? {
@@ -1396,7 +1398,7 @@ class RemoteFleet {
                 }),
                 polyline: {
                   positions: [],
-                  width: isBullet ? 3 : isMissile ? 3 : 2,
+                  width: isBullet ? 5 : isMissile ? 3 : 2,
                   material: new Cesium.PolylineGlowMaterialProperty({
                     color: isBullet
                       ? Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.85)
@@ -1405,7 +1407,7 @@ class RemoteFleet {
                         : Cesium.Color.fromCssColorString("#ffb454").withAlpha(0.9),
                     glowPower: isBullet ? 0.16 : 0.12,
                   }),
-                  show: !isBullet || item.tracer === true,
+                  show: true,
                 },
               }),
             };
@@ -2086,7 +2088,7 @@ class Guns {
 
   _fire(state) {
     const origin = Cesium.Cartesian3.fromDegrees(state.longitude, state.latitude, state.height);
-    const direction = this._flightDirection(state, origin);
+    const direction = this._gunAimDirection(state, origin);
     const aircraftVelocity = this._aircraftVelocity(state, origin);
     const velocity = Cesium.Cartesian3.add(
       Cesium.Cartesian3.multiplyByScalar(direction, BULLET_SPEED, new Cesium.Cartesian3()),
@@ -2113,9 +2115,9 @@ class Guns {
         position: muzzle,
         orientation: orientationAlongDirection(velocity),
         cylinder: {
-          length: 1.4,
-          topRadius: 0.045,
-          bottomRadius: 0.07,
+          length: 2.2,
+          topRadius: 0.07,
+          bottomRadius: 0.11,
           material: tracer
             ? Cesium.Color.fromCssColorString("#ffd68a")
             : Cesium.Color.fromCssColorString("#b8c2c8"),
@@ -2124,17 +2126,57 @@ class Guns {
         },
         polyline: {
           positions: [muzzle, muzzle],
-          width: 2,
+          width: tracer ? 4 : 3,
           material: new Cesium.PolylineGlowMaterialProperty({
             color: Cesium.Color.fromCssColorString("#ff9d4d").withAlpha(0.75),
             glowPower: 0.12,
           }),
-          show: tracer,
+          show: true,
         },
       }),
     };
     this.bullets.push(bullet);
     this.rounds++;
+  }
+
+  _gunAimDirection(state, origin) {
+    const direction = this._flightDirection(state, origin);
+    if (!this.fleet) return direction;
+
+    let assistedTarget = null;
+    let bestAssistDot = Math.cos(GUN_AIM_ASSIST_CONE);
+    for (const target of this.fleet.targets()) {
+      const toTarget = Cesium.Cartesian3.subtract(
+        target.position,
+        origin,
+        new Cesium.Cartesian3()
+      );
+      const distance = Cesium.Cartesian3.magnitude(toTarget);
+      if (distance > GUN_AIM_ASSIST_DISTANCE || distance < 1) continue;
+      Cesium.Cartesian3.divideByScalar(toTarget, distance, toTarget);
+      const assistDot = Cesium.Cartesian3.dot(direction, toTarget);
+      if (assistDot > bestAssistDot) {
+        bestAssistDot = assistDot;
+        assistedTarget = target;
+      }
+    }
+
+    if (!assistedTarget) return direction;
+    const toTarget = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.subtract(assistedTarget.position, origin, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    const coneProgress = Cesium.Math.clamp(
+      (bestAssistDot - Math.cos(GUN_AIM_ASSIST_CONE)) /
+        (1 - Math.cos(GUN_AIM_ASSIST_CONE)),
+      0,
+      1
+    );
+    const assisted = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.lerp(direction, toTarget, 0.18 + coneProgress * 0.32, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3()
+    );
+    return assisted;
   }
 
   _advance(dt) {
