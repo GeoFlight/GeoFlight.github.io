@@ -40,7 +40,7 @@ const CESIUM_ION_TOKEN =
 
 const AIRCRAFT_MODEL_URL = "assets/planes/f-15c_eagle_usa.glb";
 const COCKPIT_MODEL_URL = "assets/cockpit.glb";
-const COCKPIT_EYE_FORWARD_OFFSET = 1.7;
+const COCKPIT_EYE_FORWARD_OFFSET = 3.7;
 const COCKPIT_EYE_HEIGHT_OFFSET = 2.05;
 const SPAWN_HEIGHT_ABOVE_TERRAIN = 800; // meters — leaves room for aerobatic maneuvers
 // The model file itself has been re-baked to real-world metres (19.43 m long)
@@ -94,9 +94,6 @@ const TRACER_INTERVAL = 2;             // denser tracer stream so rounds stay vi
 const TRACER_LENGTH = 90;              // meters
 const BULLET_GRAVITY = 9.81;           // m/s²
 const HIT_RADIUS = 14;                 // meters — approximate aircraft hit radius
-const GUN_AIM_ASSIST_CONE = Cesium.Math.toRadians(1.5);
-const GUN_AIM_ASSIST_DISTANCE = 1800;
-const GUN_AIM_ASSIST_MAX_STRENGTH = 0.1;
 const MISSILE_DAMAGE = 40;
 const MISSILE_LOCK_TIME = 3;
 const MISSILE_LOCK_CONE = Cesium.Math.toRadians(24);
@@ -2410,48 +2407,7 @@ class Guns {
   }
 
   _gunAimDirection(state, origin) {
-    const direction = this._flightDirection(state, origin);
-    if (!this.fleet) return direction;
-
-    let assistedTarget = null;
-    let bestAssistDot = Math.cos(GUN_AIM_ASSIST_CONE);
-    for (const target of this.fleet.targets()) {
-      const toTarget = Cesium.Cartesian3.subtract(
-        target.position,
-        origin,
-        new Cesium.Cartesian3()
-      );
-      const distance = Cesium.Cartesian3.magnitude(toTarget);
-      if (distance > GUN_AIM_ASSIST_DISTANCE || distance < 1) continue;
-      Cesium.Cartesian3.divideByScalar(toTarget, distance, toTarget);
-      const assistDot = Cesium.Cartesian3.dot(direction, toTarget);
-      if (assistDot > bestAssistDot) {
-        bestAssistDot = assistDot;
-        assistedTarget = target;
-      }
-    }
-
-    if (!assistedTarget) return direction;
-    const toTarget = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.subtract(assistedTarget.position, origin, new Cesium.Cartesian3()),
-      new Cesium.Cartesian3()
-    );
-    const coneProgress = Cesium.Math.clamp(
-      (bestAssistDot - Math.cos(GUN_AIM_ASSIST_CONE)) /
-        (1 - Math.cos(GUN_AIM_ASSIST_CONE)),
-      0,
-      1
-    );
-    const assisted = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.lerp(
-        direction,
-        toTarget,
-        coneProgress * GUN_AIM_ASSIST_MAX_STRENGTH,
-        new Cesium.Cartesian3()
-      ),
-      new Cesium.Cartesian3()
-    );
-    return assisted;
+    return this._flightDirection(state, origin);
   }
 
   _advance(dt) {
